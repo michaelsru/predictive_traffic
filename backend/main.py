@@ -1,12 +1,19 @@
+import os
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
+# Try loading from backend dir first, then from root dir
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.local'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env.local'))
+
 from sqlalchemy.orm import Session
 from database import get_db, engine, Base
 from models import ChatRequest
 from simulator import start_simulator, set_scenario
 from analytics import get_latest_status, get_history
 from claude_client import call_claude_api
-
+from gemini_client import call_gemini_api
 app = FastAPI()
 
 app.add_middleware(
@@ -42,7 +49,7 @@ def update_scenario(mode: str):
 def chat(request: ChatRequest, db: Session = Depends(get_db)):
     status_data = get_latest_status(db)
     try:
-        response = call_claude_api(request.message, request.history, status_data)
+        response = call_gemini_api(request.message, request.history, status_data)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

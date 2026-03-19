@@ -11,9 +11,9 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Set your Anthropic API key:
+Set your Gemini API key:
 ```bash
-export ANTHROPIC_API_KEY="your-api-key-here"
+export GEMINI_API_KEY="your-api-key-here"
 ```
 
 Run the backend server:
