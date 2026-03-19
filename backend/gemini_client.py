@@ -57,7 +57,7 @@ Do not include markdown formatting, just the raw JSON.
     contents.append({"role": "user", "parts": [{"text": message}]})
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3-flash-preview",
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,

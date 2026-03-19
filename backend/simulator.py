@@ -60,7 +60,7 @@ def simulator_loop():
             db.commit()
         finally:
             db.close()
-        time.sleep(30)
+        time.sleep(2)
 
 def start_simulator():
     thread = threading.Thread(target=simulator_loop, daemon=True)
