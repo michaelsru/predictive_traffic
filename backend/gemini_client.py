@@ -14,6 +14,8 @@ def call_gemini_api(message: str, history: list, status_data: dict):
 Current segment status data:
 {json.dumps(status_data, indent=2)}
 
+CRITICAL INSTRUCTION: If there are previous status updates in the chat history, your new status must focus on what has changed. Provide clear updates regarding the specific issues or segments mentioned in the previous statuses.
+
 Respond ONLY with a valid JSON object matching this exact schema:
 {{
   "narrative": "string — 2-4 sentence plain English status summary",
@@ -52,7 +54,10 @@ Do not include markdown formatting, just the raw JSON.
     for msg in history:
         # Parse standard role (user/assistant) into user/model
         role = "user" if msg["role"] == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+        text_content = msg.get("content", "")
+        if "talking_points" in msg and msg["talking_points"]:
+            text_content += f"\nPrevious talking points: {json.dumps(msg['talking_points'])}"
+        contents.append({"role": role, "parts": [{"text": text_content}]})
     
     contents.append({"role": "user", "parts": [{"text": message}]})
 
