@@ -36,11 +36,11 @@ Respond ONLY with a valid JSON object matching this exact schema:
 }}
 
 Segment locations for anchors:
-S1: 43.7280, -79.5120
-S2: 43.7265, -79.5280
-S3: 43.7255, -79.5420
-S4: 43.7242, -79.5580
-S5: 43.7228, -79.5740
+S1: 43.7157, -79.5264
+S2: 43.7178, -79.5076
+S3: 43.7199, -79.4936
+S4: 43.7226, -79.4818
+S5: 43.7271, -79.4624
 
 Only include noteworthy segments in talking_points.
 Always include all 5 segments in highlights.

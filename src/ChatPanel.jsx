@@ -1,82 +1,316 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { sendChat } from './api';
+import { useAgentState, useAgentDispatch } from './contexts/AgentContext';
 
-export default function ChatPanel({ history, onResponse, onHoverAnchor }) {
+// Commands that are mechanical/prep steps — hidden by default
+const THINKING_COMMANDS = new Set([
+  'switchChart', 'setTimeWindow', 'switchOverlay', 'clearHighlights',
+]);
+
+/**
+ * Groups narrative + uiCommands into sequential blocks:
+ *   { type: 'step',    index, text, cmd }
+ *   { type: 'thinking', items: [{ index, text, cmd }, ...] }
+ */
+function groupSteps(narrative, uiCommands) {
+  const groups = [];
+  let thinkingAccum = null;
+
+  narrative.forEach((text, index) => {
+    const cmd = uiCommands[index] ?? {};
+    const isThinking = THINKING_COMMANDS.has(cmd.type);
+
+    if (isThinking) {
+      if (!thinkingAccum) { thinkingAccum = { type: 'thinking', items: [] }; groups.push(thinkingAccum); }
+      thinkingAccum.items.push({ index, text, cmd });
+    } else {
+      thinkingAccum = null;
+      groups.push({ type: 'step', index, text, cmd });
+    }
+  });
+
+  return groups;
+}
+
+const SUGGESTED_QUERIES = [
+  "Give me a full corridor brief",
+  "What's happening near S3?",
+  "Triage my active alerts",
+  "Walk me through the last 30 minutes on S2",
+  "Why is the risk score high?",
+  "What should I watch if this pattern continues?",
+];
+
+// ─── ThinkingGroup ──────────────────────────────────────────────────────────
+function ThinkingGroup({ items, currentStep, agentDispatch }) {
+  const [open, setOpen] = useState(false);
+  const [expandedCmd, setExpandedCmd] = useState(null); // index of item whose cmd JSON is shown
+  const containsActive = items.some(it => it.index === currentStep);
+
+  return (
+    <div className={`rounded-lg border transition-all ${containsActive ? 'border-blue-500/30 bg-blue-600/10' : 'border-gray-700/40 bg-gray-800/30'}`}>
+      {/* Toggle row */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+      >
+        <span className={`transition-transform duration-150 ${open ? 'rotate-90' : ''}`}>▶</span>
+        <span className="font-mono uppercase tracking-widest">
+          {items.length} thinking step{items.length > 1 ? 's' : ''}
+        </span>
+        {containsActive && (
+          <span className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+        )}
+      </button>
+
+      {/* Expanded items */}
+      {open && (
+        <div className="px-2 pb-2 flex flex-col gap-0.5 border-t border-gray-700/40">
+          {items.map(({ index, text, cmd }) => (
+            <div key={index} className={`rounded-md transition-all ${index === currentStep ? 'bg-blue-600/20 border border-blue-500/30' : ''}`}>
+              <button
+                onClick={() => { agentDispatch({ type: 'PAUSE' }); agentDispatch({ type: 'JUMP', step: index }); }}
+                className={`flex items-start gap-2 text-left px-2 py-1.5 w-full text-xs
+                  ${index === currentStep ? 'text-gray-100' : index < currentStep ? 'text-gray-500 hover:text-gray-300' : 'text-gray-400 hover:text-gray-200'}`}
+              >
+                <span className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold mt-0.5
+                  ${index === currentStep ? 'bg-blue-500 text-white' : index < currentStep ? 'bg-gray-600 text-gray-400' : 'bg-gray-700 text-gray-500'}`}>
+                  {index + 1}
+                </span>
+                <span className="leading-snug flex-1">{text}</span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  title="Show raw command"
+                  onClick={e => { e.stopPropagation(); setExpandedCmd(p => p === index ? null : index); }}
+                  onKeyDown={e => e.key === 'Enter' && (e.stopPropagation(), setExpandedCmd(p => p === index ? null : index))}
+                  className="shrink-0 px-1 py-0.5 rounded text-[9px] font-mono bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-gray-200 cursor-pointer transition-colors"
+                >
+                  {'{ }'}
+                </span>
+              </button>
+              {expandedCmd === index && (
+                <pre className="mx-2 mb-1.5 px-2 py-1.5 rounded bg-gray-900/80 border border-gray-700/60 text-[9px] text-gray-400 font-mono overflow-x-auto whitespace-pre-wrap">
+                  {JSON.stringify(cmd, null, 2)}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── StepList ────────────────────────────────────────────────────────────────
+function StepList({ narrative, uiCommands, currentStep, agentDispatch }) {
+  const groups = groupSteps(narrative, uiCommands);
+  return (
+    <div className="px-2 pb-2 flex flex-col gap-0.5">
+      {groups.map((group, gi) =>
+        group.type === 'thinking' ? (
+          <ThinkingGroup
+            key={`tg-${gi}`}
+            items={group.items}
+            currentStep={currentStep}
+            agentDispatch={agentDispatch}
+          />
+        ) : (
+          <button
+            key={group.index}
+            onClick={() => { agentDispatch({ type: 'PAUSE' }); agentDispatch({ type: 'JUMP', step: group.index }); }}
+            className={`flex items-start gap-2 text-left px-2 py-1.5 rounded-lg transition-all w-full text-xs
+              ${group.index === currentStep
+                ? 'bg-blue-600/25 border border-blue-500/40 text-gray-100'
+                : group.index < currentStep
+                  ? 'text-gray-500 hover:text-gray-300 hover:bg-gray-700/30'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/20'}`}
+          >
+            <span className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold mt-0.5
+              ${group.index === currentStep ? 'bg-blue-500 text-white' : group.index < currentStep ? 'bg-gray-600 text-gray-400' : 'bg-gray-700 text-gray-500'}`}>
+              {group.index + 1}
+            </span>
+            <span className="leading-snug">{group.text}</span>
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
+// ─── ChatPanel ───────────────────────────────────────────────────────────────
+export default function ChatPanel({ history, onResponse }) {
+
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
+  const { narrative, uiCommands, currentStep, isPlaying } = useAgentState();
+  const agentDispatch = useAgentDispatch();
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const totalSteps = narrative.length;
+  const hasBriefing = totalSteps > 0;
 
   useEffect(() => {
-    scrollToBottom();
-  }, [history]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [history, currentStep]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
-
-    const userMsg = input;
+    const userMsg = input.trim();
     setInput('');
     setLoading(true);
-
+    setError(null);
     try {
-      // Pass history without talking_points for the API
-      const apiHistory = history.map(h => ({ role: h.role, content: h.content }));
+      const apiHistory = history.slice(-10).map(h => ({ role: h.role, content: h.content }));
       const response = await sendChat(userMsg, apiHistory);
+      agentDispatch({ type: 'LOAD', narrative: response.narrative, uiCommands: response.uiCommands, query: userMsg });
       onResponse(response, userMsg);
     } catch (err) {
       console.error(err);
-      alert('Failed to send message');
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="chat-panel">
-      <div className="chat-history">
+    <div className="w-[420px] shrink-0 flex flex-col bg-gray-900 border-r border-gray-800">
+
+      {/* ── Header ─────────────────────────────────── */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-800 shrink-0">
+        <span className="text-blue-400">◈</span>
+        <span className="text-xs font-bold text-gray-300 uppercase tracking-widest">Co-pilot</span>
+      </div>
+
+      {/* ── History ────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3">
         {history.map((msg, idx) => (
-          <div key={idx} className={`chat-message ${msg.role}`}>
-            <div className="message-content">{msg.content}</div>
-            {msg.talking_points && msg.talking_points.length > 0 && (
-              <div className="talking-points">
-                {msg.talking_points.map(tp => (
-                  <div 
-                    key={tp.id} 
-                    className="talking-point-card"
-                    onMouseEnter={() => onHoverAnchor(tp.anchor)}
-                    onMouseLeave={() => onHoverAnchor(null)}
-                  >
-                    <div className="tp-header">
-                      <span className="tp-id">{tp.id}</span>
-                      <span className={`tp-severity ${tp.severity}`}>{tp.severity}</span>
-                    </div>
-                    <div className="tp-text">{tp.text}</div>
-                    <div className="tp-confidence">
-                      <div className="confidence-bar" style={{ width: `${tp.confidence * 100}%` }}></div>
-                    </div>
-                  </div>
-                ))}
+          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            {msg.role === 'user' ? (
+              <div className="bg-blue-600 text-white text-sm px-3 py-2 rounded-2xl rounded-tr-sm max-w-[80%]">
+                {msg.content}
+              </div>
+            ) : (
+              <div className="w-full bg-gray-800/60 rounded-xl border border-gray-700/50 overflow-hidden">
+                <div className="px-3 pt-2.5 pb-1 flex items-center gap-1.5">
+                  <span className="text-blue-400 text-xs">◈</span>
+                  <span className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold">Agent Briefing</span>
+                </div>
+
+                {/* Step list — only on last assistant message */}
+                {idx === history.length - 1 && hasBriefing ? (
+                  <StepList
+                    narrative={narrative}
+                    uiCommands={uiCommands}
+                    currentStep={currentStep}
+                    agentDispatch={agentDispatch}
+                  />
+                ) : (
+                  <p className="px-3 pb-3 text-sm text-gray-300 leading-relaxed">{msg.content}</p>
+                )}
               </div>
             )}
           </div>
         ))}
-        {loading && <div className="chat-message assistant loading">Analyzing corridor...</div>}
+
+        {loading && (
+          <div className="flex items-center gap-2 text-gray-500 text-sm px-2">
+            <span className="flex gap-1">
+              {[0, 1, 2].map(i => (
+                <span key={i} className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce"
+                  style={{ animationDelay: `${i * 0.15}s` }} />
+              ))}
+            </span>
+            Assembling corridor context…
+          </div>
+        )}
+        {error && (
+          <div className="mx-2 px-3 py-2 rounded-lg bg-red-950/60 border border-red-700/50 text-red-400 text-xs">
+            <span className="font-bold">Error: </span>{error}
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
-      <form className="chat-input-form" onSubmit={handleSubmit}>
-        <input 
-          type="text" 
-          value={input} 
-          onChange={(e) => setInput(e.target.value)} 
-          placeholder="Ask about road conditions..."
-          disabled={loading}
-        />
-        <button type="submit" disabled={loading || !input.trim()}>Send</button>
-      </form>
+
+      {/* ── Step Navigator ─────────────────────────── */}
+      {hasBriefing && (
+        <div className="px-3 py-2 border-t border-gray-800 bg-gray-900/80 shrink-0">
+          {/* Progress bar */}
+          <div className="h-0.5 bg-gray-700 rounded-full mb-2 overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full step-progress-bar"
+              style={{ width: `${((currentStep + 1) / totalSteps) * 100}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <button
+              onClick={() => agentDispatch({ type: 'PREV' })}
+              disabled={currentStep === 0}
+              className="px-2.5 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            >◀</button>
+
+            <span className="text-xs text-gray-400 font-mono">
+              Step <span className="text-white font-bold">{currentStep + 1}</span>
+              <span className="text-gray-600 mx-1">of</span>
+              {totalSteps}
+            </span>
+
+            <button
+              onClick={() => agentDispatch({ type: isPlaying ? 'PAUSE' : 'PLAY' })}
+              className={`px-3 py-1 rounded text-xs font-bold transition-all
+                ${isPlaying ? 'bg-blue-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'}`}
+              title={isPlaying ? 'Pause' : 'Auto-advance every 4s'}
+            >
+              {isPlaying ? '⏸ Pause' : '⏵ Auto'}
+            </button>
+
+            <button
+              onClick={() => agentDispatch({ type: 'NEXT' })}
+              disabled={currentStep === totalSteps - 1}
+              className="px-2.5 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            >▶</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Input ──────────────────────────────────── */}
+      <div className="px-3 pb-3 pt-2 border-t border-gray-800 shrink-0">
+        {history.length === 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {SUGGESTED_QUERIES.map(q => (
+              <button
+                key={q}
+                onClick={() => setInput(q)}
+                className="text-[10px] px-2 py-1 rounded-full bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-gray-200 border border-gray-700 hover:border-gray-500 transition-all"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        )}
+        <form onSubmit={handleSubmit} className="flex gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask the co-pilot…"
+            disabled={loading}
+            autoFocus
+            className="flex-1 bg-gray-800 border border-gray-700 focus:border-blue-500 text-gray-100 placeholder:text-gray-600
+              text-sm px-3 py-2 rounded-lg outline-none transition-colors"
+          />
+          <button
+            type="submit"
+            disabled={loading || !input.trim()}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed
+              text-white text-sm font-semibold rounded-lg transition-all"
+          >
+            {loading ? '…' : 'Send'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

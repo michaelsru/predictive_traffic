@@ -4,8 +4,8 @@ export const fetchStatus = async () => {
   return res.json();
 };
 
-export const fetchHistory = async (seg) => {
-  const res = await fetch(`/api/history/${seg}`);
+export const fetchHistory = async (seg, limit = 30) => {
+  const res = await fetch(`/api/history/${seg}?limit=${limit}`);
   if (!res.ok) throw new Error('Failed to fetch history');
   return res.json();
 };
@@ -22,6 +22,10 @@ export const sendChat = async (message, history) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, history })
   });
-  if (!res.ok) throw new Error('Failed to send chat');
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { const body = await res.json(); detail = body.detail ?? detail; } catch {}
+    throw new Error(detail);
+  }
   return res.json();
 };

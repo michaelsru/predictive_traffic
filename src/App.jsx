@@ -2,80 +2,84 @@ import React, { useState, useEffect } from 'react';
 import ChatPanel from './ChatPanel';
 import MapPanel from './MapPanel';
 import SegmentPanel from './SegmentPanel';
+import AlertPanel from './AlertPanel';
+import KpiBar from './KpiBar';
 import { fetchStatus, setScenario } from './api';
+import { UICommandContextProvider } from './contexts/UICommandContext';
+import { AgentContextProvider } from './contexts/AgentContext';
 import './index.css';
 
-export default function App() {
+function App() {
   const [statusData, setStatusData] = useState({});
   const [chatHistory, setChatHistory] = useState([]);
-  const [highlights, setHighlights] = useState([]);
-  const [activeAnchor, setActiveAnchor] = useState(null);
   const [scenario, setCurrentScenario] = useState('normal');
 
   useEffect(() => {
-    const loadStatus = async () => {
-      try {
-        const data = await fetchStatus();
-        setStatusData(data);
-      } catch (err) {
-        console.error(err);
-      }
+    const load = async () => {
+      try { setStatusData(await fetchStatus()); }
+      catch (err) { console.error(err); }
     };
-    
-    loadStatus();
-    const interval = setInterval(loadStatus, 10000);
-    return () => clearInterval(interval);
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
   }, []);
 
   const handleScenarioChange = async (mode) => {
-    try {
-      await setScenario(mode);
-      setCurrentScenario(mode);
-    } catch (err) {
-      console.error(err);
-    }
+    try { await setScenario(mode); setCurrentScenario(mode); }
+    catch (err) { console.error(err); }
   };
 
   const handleChatResponse = (response, userMessage) => {
     setChatHistory(prev => [
       ...prev,
       { role: 'user', content: userMessage },
-      { role: 'assistant', content: response.narrative, talking_points: response.talking_points }
+      { role: 'assistant', content: response.narrative?.[0] ?? '' },
     ]);
-    if (response.highlights) {
-      setHighlights(response.highlights);
-    }
+  };
+
+  const scenarioColors = {
+    normal:   'bg-emerald-700 border-emerald-500',
+    forming:  'bg-yellow-700 border-yellow-500',
+    incident: 'bg-red-800 border-red-600',
   };
 
   return (
-    <div className="app-container">
-      <header className="app-header">
-        <h1>Corridor Intelligence Dashboard - Highway 401</h1>
-        <div className="scenario-controls">
-          <button 
-            className={scenario === 'normal' ? 'active' : ''} 
-            onClick={() => handleScenarioChange('normal')}>Normal</button>
-          <button 
-            className={scenario === 'forming' ? 'active' : ''} 
-            onClick={() => handleScenarioChange('forming')}>Forming</button>
-          <button 
-            className={scenario === 'incident' ? 'active' : ''} 
-            onClick={() => handleScenarioChange('incident')}>Incident</button>
+    <UICommandContextProvider>
+      <AgentContextProvider>
+        <div className="flex flex-col h-screen bg-gray-950 text-gray-100 font-sans overflow-hidden">
+
+          {/* ── Header ─────────────────────────────────────── */}
+          <header className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800 shrink-0 gap-4">
+            <KpiBar statusData={statusData} />
+
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-gray-500 uppercase tracking-widest mr-1">Scenario</span>
+              {['normal', 'forming', 'incident'].map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => handleScenarioChange(mode)}
+                  className={`px-3 py-1 rounded text-xs font-semibold border transition-all
+                    ${scenario === mode
+                      ? scenarioColors[mode] + ' text-white'
+                      : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'}`}
+                >
+                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                </button>
+              ))}
+            </div>
+          </header>
+
+          {/* ── Main ───────────────────────────────────────── */}
+          <main className="flex flex-1 overflow-hidden">
+            <ChatPanel history={chatHistory} onResponse={handleChatResponse} />
+            <MapPanel statusData={statusData} />
+            <AlertPanel statusData={statusData} />
+            <SegmentPanel statusData={statusData} />
+          </main>
         </div>
-      </header>
-      <main className="app-main">
-        <ChatPanel 
-          history={chatHistory} 
-          onResponse={handleChatResponse} 
-          onHoverAnchor={setActiveAnchor} 
-        />
-        <MapPanel 
-          highlights={highlights} 
-          activeAnchor={activeAnchor} 
-          talkingPoints={chatHistory.length > 0 ? chatHistory[chatHistory.length - 1].talking_points : []}
-        />
-        <SegmentPanel statusData={statusData} />
-      </main>
-    </div>
+      </AgentContextProvider>
+    </UICommandContextProvider>
   );
 }
+
+export default App;
