@@ -1,7 +1,6 @@
 import React from 'react';
 import { useUICommand, useUICommandDispatch } from './contexts/UICommandContext';
 
-const SEVERITY_ORDER = ['critical', 'warning', 'watch', 'normal'];
 const severityBorder  = { critical: 'border-red-500',    warning: 'border-orange-500', watch: 'border-yellow-500', normal: 'border-emerald-500' };
 const severityBg      = { critical: 'bg-red-950/70',     warning: 'bg-orange-950/70',  watch: 'bg-yellow-950/70',  normal: 'bg-emerald-950/70'  };
 const severityText    = { critical: 'text-red-400',      warning: 'text-orange-400',   watch: 'text-yellow-400',   normal: 'text-emerald-400'   };
@@ -11,13 +10,10 @@ export default function AlertPanel({ statusData }) {
   const { expandedAlertId } = useUICommand();
   const dispatch = useUICommandDispatch();
 
-  const alerts = Object.values(statusData || {})
-    .filter(seg => seg && ['critical', 'warning', 'watch'].includes(seg.severity))
-    .sort((a, b) => {
-      const ai = SEVERITY_ORDER.indexOf(a.severity);
-      const bi = SEVERITY_ORDER.indexOf(b.severity);
-      return ai !== bi ? ai - bi : (b.risk_score ?? 0) - (a.risk_score ?? 0);
-    });
+  const SEGMENT_ORDER = ['S1', 'S2', 'S3', 'S4', 'S5'];
+  const alerts = SEGMENT_ORDER
+    .map(id => statusData?.[id])
+    .filter(seg => seg && ['critical', 'warning', 'watch'].includes(seg.severity));
 
   return (
     <div className="w-56 shrink-0 flex flex-col bg-gray-900 border-l border-gray-800 overflow-hidden">
