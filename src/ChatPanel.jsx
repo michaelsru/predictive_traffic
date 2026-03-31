@@ -139,7 +139,7 @@ function StepList({ narrative, uiCommands, currentStep, agentDispatch }) {
 }
 
 // ─── ChatPanel ───────────────────────────────────────────────────────────────
-export default function ChatPanel({ history, onResponse }) {
+export default function ChatPanel({ history, onResponse, onViewFootage }) {
 
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -213,12 +213,11 @@ export default function ChatPanel({ history, onResponse }) {
                       <span className="text-[9px] text-gray-600 uppercase tracking-widest px-1 pt-0.5">Operator actions</span>
                       <div className="flex flex-col gap-1">
                         <button
-                          onClick={() => {/* stub */ }}
+                          onClick={() => onViewFootage?.()}
                           className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-100 bg-gray-800/60 hover:bg-gray-700/60 border border-gray-700/50 hover:border-gray-600 transition-all w-full text-left"
                         >
                           <span>📷</span>
                           <span>View Live Footage</span>
-                          <span className="ml-auto text-[9px] text-gray-600 italic">footage unavailable</span>
                         </button>
                         <button
                           onClick={() => {/* stub */ }}

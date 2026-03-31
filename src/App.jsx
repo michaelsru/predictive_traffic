@@ -4,6 +4,7 @@ import MapPanel from './MapPanel';
 import SegmentPanel from './SegmentPanel';
 import AlertPanel from './AlertPanel';
 import KpiBar from './KpiBar';
+import CctvSidebar from './CctvSidebar';
 import { fetchStatus, setScenario } from './api';
 import { UICommandContextProvider } from './contexts/UICommandContext';
 import { AgentContextProvider } from './contexts/AgentContext';
@@ -13,6 +14,7 @@ function App() {
   const [statusData, setStatusData] = useState({});
   const [chatHistory, setChatHistory] = useState([]);
   const [scenario, setCurrentScenario] = useState('normal');
+  const [cctvOpen, setCctvOpen] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -71,11 +73,12 @@ function App() {
 
           {/* ── Main ───────────────────────────────────────── */}
           <main className="flex flex-1 overflow-hidden">
-            <ChatPanel history={chatHistory} onResponse={handleChatResponse} />
+            <ChatPanel history={chatHistory} onResponse={handleChatResponse} onViewFootage={() => setCctvOpen(true)} />
             <MapPanel statusData={statusData} />
             <AlertPanel statusData={statusData} />
             <SegmentPanel statusData={statusData} />
           </main>
+          <CctvSidebar open={cctvOpen} onClose={() => setCctvOpen(false)} />
         </div>
       </AgentContextProvider>
     </UICommandContextProvider>
