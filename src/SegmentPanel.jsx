@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { fetchHistory } from './api';
 import { useUICommand } from './contexts/UICommandContext';
 
@@ -29,19 +30,12 @@ function Sparkline({ data, color }) {
 }
 
 function SegmentCard({ segmentId, data, isActive, activeMetric, timeWindowMins }) {
-  const [history, setHistory] = useState([]);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const h = await fetchHistory(segmentId, Math.min(Math.ceil(timeWindowMins * 15), 30));
-        setHistory(h);
-      } catch (err) { console.error(err); }
-    };
-    load();
-    const id = setInterval(load, 4000);
-    return () => clearInterval(id);
-  }, [segmentId, timeWindowMins]);
+  const limit = Math.min(Math.ceil(timeWindowMins * 15), 30);
+  const { data: history = [] } = useQuery({
+    queryKey: ['history', segmentId, limit],
+    queryFn: () => fetchHistory(segmentId, limit),
+    refetchInterval: 4000,
+  });
 
   if (!data) return (
     <div className="rounded-xl bg-gray-800/40 border border-gray-700/50 p-3 text-xs text-gray-500 italic">
