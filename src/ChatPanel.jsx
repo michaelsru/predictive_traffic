@@ -201,12 +201,42 @@ export default function ChatPanel({ history, onResponse }) {
 
                 {/* Step list — only on last assistant message */}
                 {idx === history.length - 1 && hasBriefing ? (
-                  <StepList
-                    narrative={narrative}
-                    uiCommands={uiCommands}
-                    currentStep={currentStep}
-                    agentDispatch={agentDispatch}
-                  />
+                  <>
+                    <StepList
+                      narrative={narrative}
+                      uiCommands={uiCommands}
+                      currentStep={currentStep}
+                      agentDispatch={agentDispatch}
+                    />
+                    {/* ── Operator actions ── */}
+                    <div className="px-2 pb-2 pt-1 flex flex-col gap-1.5 border-t border-gray-700/40 mt-0.5">
+                      <span className="text-[9px] text-gray-600 uppercase tracking-widest px-1 pt-0.5">Operator actions</span>
+                      <div className="flex flex-col gap-1">
+                        <button
+                          onClick={() => {/* stub */ }}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-100 bg-gray-800/60 hover:bg-gray-700/60 border border-gray-700/50 hover:border-gray-600 transition-all w-full text-left"
+                        >
+                          <span>📷</span>
+                          <span>View Live Footage</span>
+                          <span className="ml-auto text-[9px] text-gray-600 italic">footage unavailable</span>
+                        </button>
+                        <button
+                          onClick={() => {/* stub */ }}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-orange-300 hover:text-orange-100 bg-orange-950/30 hover:bg-orange-900/40 border border-orange-700/30 hover:border-orange-600/50 transition-all w-full text-left"
+                        >
+                          <span>⚠</span>
+                          <span>Confirm Incident</span>
+                        </button>
+                        <button
+                          onClick={() => {/* stub */ }}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-red-300 hover:text-red-100 bg-red-950/30 hover:bg-red-900/40 border border-red-700/30 hover:border-red-600/50 transition-all w-full text-left"
+                        >
+                          <span>🚨</span>
+                          <span>Create Incident Response</span>
+                        </button>
+                      </div>
+                    </div>
+                  </>
                 ) : (
                   <p className="px-3 pb-3 text-sm text-gray-300 leading-relaxed">{msg.content}</p>
                 )}
