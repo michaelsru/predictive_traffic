@@ -9,7 +9,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env.local')
 
 from sqlalchemy.orm import Session
 from database import get_db, engine, Base
-from models import ChatRequest
+from models import ChatRequest, IncidentLog, IncidentRequest
 from simulator import start_simulator, set_scenario
 from analytics import get_history, get_pipeline_context
 from gemini_client import call_gemini_api
@@ -67,6 +67,33 @@ def update_scenario(mode: str):
     _active_scenario = mode
     set_scenario(mode)
     return {"status": "success", "mode": mode}
+
+@app.post("/api/incident")
+def log_incident(request: IncidentRequest, db: Session = Depends(get_db)):
+    VALID_SEVERITIES = {"minor", "moderate", "major", "critical"}
+    if request.severity not in VALID_SEVERITIES:
+        raise HTTPException(status_code=400, detail=f"severity must be one of {VALID_SEVERITIES}")
+    log = IncidentLog(
+        segment_id=request.segment_id,
+        severity=request.severity,
+        risk_score=request.risk_score,
+        avg_speed_kmh=request.avg_speed_kmh,
+        notes=request.notes,
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    return {
+        "id":           log.id,
+        "created_at":   log.created_at.isoformat(),
+        "segment_id":   log.segment_id,
+        "severity":     log.severity,
+        "risk_score":   log.risk_score,
+        "avg_speed_kmh": log.avg_speed_kmh,
+        "notes":        log.notes,
+        "confirmed_by": log.confirmed_by,
+    }
+
 
 @app.post("/api/chat")
 def chat(request: ChatRequest, db: Session = Depends(get_db)):

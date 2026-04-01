@@ -29,3 +29,18 @@ export const sendChat = async (message, history) => {
   }
   return res.json();
 };
+
+export const logIncident = async (payload) => {
+  const res = await fetch('/api/incident', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { const body = await res.json(); detail = body.detail ?? detail; } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
+};
+
