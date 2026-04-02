@@ -238,7 +238,7 @@ export default function ChatPanel({ history, onResponse, onViewFootage }) {
   const [error, setError] = useState(null);
   const [incidentFormOpen, setIncidentFormOpen] = useState(false);
   const messagesEndRef = useRef(null);
-  const { narrative, uiCommands, currentStep, isPlaying } = useAgentState();
+  const { narrative, uiCommands, currentStep } = useAgentState();
   const agentDispatch = useAgentDispatch();
 
   // Derive worst segment: rank pulseSegment commands by color severity, fall back to first panTo
@@ -395,7 +395,7 @@ export default function ChatPanel({ history, onResponse, onViewFootage }) {
             <button
               onClick={() => agentDispatch({ type: 'PREV' })}
               disabled={currentStep === 0}
-              className="px-2.5 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              className="px-4 py-1.5 rounded text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
             >◀</button>
 
             <span className="text-xs text-gray-400 font-mono">
@@ -405,20 +405,12 @@ export default function ChatPanel({ history, onResponse, onViewFootage }) {
             </span>
 
             <button
-              onClick={() => agentDispatch({ type: isPlaying ? 'PAUSE' : 'PLAY' })}
-              className={`px-3 py-1 rounded text-xs font-bold transition-all
-                ${isPlaying ? 'bg-blue-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'}`}
-              title={isPlaying ? 'Pause' : 'Auto-advance every 4s'}
-            >
-              {isPlaying ? '⏸ Pause' : '⏵ Auto'}
-            </button>
-
-            <button
               onClick={() => agentDispatch({ type: 'NEXT' })}
               disabled={currentStep === totalSteps - 1}
-              className="px-2.5 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              className="px-4 py-1.5 rounded text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
             >▶</button>
           </div>
+
         </div>
       )}
 

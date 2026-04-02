@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useRef, useEffect } from 'react';
+import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { useUICommandDispatch } from './UICommandContext';
 
 // ---------------------------------------------------------------------------
@@ -8,7 +8,6 @@ const initialState = {
   narrative: [],       // string[]
   uiCommands: [],      // object[]
   currentStep: -1,     // -1 = no active briefing
-  isPlaying: false,
   query: '',           // the user query that produced this briefing
 };
 
@@ -23,7 +22,6 @@ function agentReducer(state, action) {
         narrative: action.narrative,
         uiCommands: action.uiCommands,
         currentStep: 0,
-        isPlaying: false,
         query: action.query ?? '',
       };
     case 'NEXT':
@@ -35,10 +33,7 @@ function agentReducer(state, action) {
     case 'JUMP':
       if (action.step < 0 || action.step >= state.narrative.length) return state;
       return { ...state, currentStep: action.step };
-    case 'PLAY':
-      return { ...state, isPlaying: true };
-    case 'PAUSE':
-      return { ...state, isPlaying: false };
+
     case 'RESET':
       return { ...initialState };
     default:
@@ -55,7 +50,6 @@ const AgentDispatchContext = createContext(null);
 export function AgentContextProvider({ children }) {
   const [state, dispatch] = useReducer(agentReducer, initialState);
   const dispatchUICommand = useUICommandDispatch();
-  const autoAdvanceRef = useRef(null);
 
   // Fire the UI command whenever currentStep changes
   const prevStep = useRef(-1);
@@ -74,24 +68,7 @@ export function AgentContextProvider({ children }) {
     prevStep.current = -1;
   }, [state.uiCommands]);
 
-  // Auto-advance every 4 s while playing
-  useEffect(() => {
-    if (state.isPlaying) {
-      autoAdvanceRef.current = setInterval(() => {
-        dispatch({ type: 'NEXT' });
-      }, 4000);
-    } else {
-      clearInterval(autoAdvanceRef.current);
-    }
-    return () => clearInterval(autoAdvanceRef.current);
-  }, [state.isPlaying]);
 
-  // Auto-stop at the last step
-  useEffect(() => {
-    if (state.isPlaying && state.currentStep === state.narrative.length - 1) {
-      dispatch({ type: 'PAUSE' });
-    }
-  }, [state.currentStep, state.narrative.length, state.isPlaying]);
 
   return (
     <AgentStateContext.Provider value={state}>
