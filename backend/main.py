@@ -105,10 +105,8 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         active_scenario=_active_scenario,
         weather=_get_weather(),
     )
-    # Cap history to last 5 exchanges server-side as a safety net
-    capped_history = request.history[-10:] if request.history else []
     try:
-        response = call_gemini_api(request.message, capped_history, llm_context)
+        response = call_gemini_api(request.message, request.history, llm_context)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

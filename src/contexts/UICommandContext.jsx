@@ -67,10 +67,6 @@ function uiCommandReducer(state, action) {
     case 'switchOverlay':
       return { ...state, overlayMode: action.overlay };
 
-    case 'pause':
-      // No-op state change — timing is handled by AgentContext auto-advance
-      return state;
-
     case 'annotate': {
       const id = ++annotationCounter;
       const annotation = {

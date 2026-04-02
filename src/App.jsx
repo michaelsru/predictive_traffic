@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import ChatPanel from './ChatPanel';
 import MapPanel from './MapPanel';
 import SegmentPanel from './SegmentPanel';
@@ -6,25 +6,21 @@ import AlertPanel from './AlertPanel';
 import KpiBar from './KpiBar';
 import CctvSidebar from './CctvSidebar';
 import { fetchStatus, setScenario } from './api';
+import { useQuery } from '@tanstack/react-query';
 import { UICommandContextProvider } from './contexts/UICommandContext';
 import { AgentContextProvider } from './contexts/AgentContext';
 import './index.css';
 
 function App() {
-  const [statusData, setStatusData] = useState({});
   const [chatHistory, setChatHistory] = useState([]);
   const [scenario, setCurrentScenario] = useState('normal');
   const [cctvOpen, setCctvOpen] = useState(false);
 
-  useEffect(() => {
-    const load = async () => {
-      try { setStatusData(await fetchStatus()); }
-      catch (err) { console.error(err); }
-    };
-    load();
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
-  }, []);
+  const { data: statusData = {} } = useQuery({
+    queryKey: ['status'],
+    queryFn: fetchStatus,
+    refetchInterval: 5000,
+  });
 
   const handleScenarioChange = async (mode) => {
     try { await setScenario(mode); setCurrentScenario(mode); }
