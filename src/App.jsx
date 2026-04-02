@@ -5,6 +5,8 @@ import SegmentPanel from './SegmentPanel';
 import AlertPanel from './AlertPanel';
 import KpiBar from './KpiBar';
 import CctvSidebar from './CctvSidebar';
+import LogsPage from './LogsPage';
+import SimulatorControls from './SimulatorControls';
 import { fetchStatus, setScenario } from './api';
 import { useQuery } from '@tanstack/react-query';
 import { UICommandContextProvider } from './contexts/UICommandContext';
@@ -15,6 +17,7 @@ function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [scenario, setCurrentScenario] = useState('normal');
   const [cctvOpen, setCctvOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
 
   const { data: statusData = {} } = useQuery({
     queryKey: ['status'],
@@ -51,6 +54,13 @@ function App() {
             <KpiBar statusData={statusData} />
 
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setLogsOpen(true)}
+                className="px-3 py-1 rounded text-xs font-semibold border transition-all
+                  bg-gray-800 border-gray-700 text-gray-400 hover:border-blue-500 hover:text-blue-400"
+              >
+                📋 Logs
+              </button>
               <span className="text-xs text-gray-500 uppercase tracking-widest mr-1">Scenario</span>
               {['normal', 'forming', 'incident'].map(mode => (
                 <button
@@ -75,6 +85,8 @@ function App() {
             <SegmentPanel statusData={statusData} />
           </main>
           <CctvSidebar open={cctvOpen} onClose={() => setCctvOpen(false)} />
+          {logsOpen && <LogsPage onClose={() => setLogsOpen(false)} />}
+          <SimulatorControls />
         </div>
       </AgentContextProvider>
     </UICommandContextProvider>

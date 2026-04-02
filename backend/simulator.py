@@ -3,6 +3,7 @@ import time
 import random
 from datetime import datetime
 from database import SessionLocal, engine, Base
+from sqlalchemy import text
 from models import SegmentReading
 
 Base.metadata.create_all(bind=engine)
@@ -12,10 +13,29 @@ BASE_SPEED = 100.0
 BASE_STDDEV = 5.0
 
 scenario_mode = "normal"
+_paused = threading.Event()   # set = paused, clear = running
 
 def set_scenario(mode: str):
     global scenario_mode
     scenario_mode = mode
+
+def pause():
+    _paused.set()
+
+def resume():
+    _paused.clear()
+
+def is_paused() -> bool:
+    return _paused.is_set()
+
+def clear_readings():
+    """Truncate segment_readings — call only when paused or from the main thread."""
+    db = SessionLocal()
+    try:
+        db.execute(text("DELETE FROM segment_readings"))
+        db.commit()
+    finally:
+        db.close()
 
 def generate_reading(segment_id: str) -> SegmentReading:
     avg_speed = BASE_SPEED
@@ -52,6 +72,9 @@ def generate_reading(segment_id: str) -> SegmentReading:
 
 def simulator_loop():
     while True:
+        if _paused.is_set():
+            time.sleep(0.5)
+            continue
         db = SessionLocal()
         try:
             for seg in SEGMENTS:

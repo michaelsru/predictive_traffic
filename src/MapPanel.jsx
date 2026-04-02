@@ -73,7 +73,7 @@ export default function MapPanel({ statusData }) {
   });
 
   return (
-    <div className="flex-1 relative">
+    <div className="flex-1 relative" style={{ isolation: 'isolate' }}>
       <MapContainer center={[43.722, -79.49]} zoom={13} style={{ height: '100%', width: '100%' }}>
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
