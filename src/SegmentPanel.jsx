@@ -90,7 +90,10 @@ function SegmentCard({ segmentId, data, isActive, activeMetric, timeWindowMins }
 
 export default function SegmentPanel({ statusData }) {
   const { activeSegment, activeMetric, timeWindowMins } = useUICommand();
-  const SEGMENTS = ['S1', 'S2', 'S3', 'S4', 'S5'];
+  // Derive segment list dynamically from live data, sorted numerically (S1, S2, ... S20)
+  const SEGMENTS = Object.keys(statusData || {}).sort(
+    (a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1))
+  );
 
   const sorted = [...SEGMENTS].sort((a, b) => {
     if (a === activeSegment) return -1;

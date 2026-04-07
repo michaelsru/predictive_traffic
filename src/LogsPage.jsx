@@ -22,7 +22,7 @@ const SEV_DOT = {
   normal:   'bg-gray-500',
 };
 
-const SEGMENTS   = ['', 'S1', 'S2', 'S3', 'S4', 'S5'];
+const SEGMENTS   = ['', ...Array.from({length: 20}, (_, i) => `S${i + 1}`)];
 const PAGE_SIZE  = 25;
 
 function SevBadge({ sev }) {

@@ -65,12 +65,6 @@ export default function MapPanel({ statusData }) {
     return { color: '#3b82f6', weight: 5, opacity: 0.85 };
   };
 
-  const createLabel = (id) => L.divIcon({
-    className: 'segment-label-icon',
-    html: `<div class="seg-label${activeSegment === id ? ' active' : ''}">${id}</div>`,
-    iconSize: [30, 20],
-    iconAnchor: [15, 10],
-  });
 
   return (
     <div className="flex-1 relative" style={{ isolation: 'isolate' }}>
@@ -89,10 +83,6 @@ export default function MapPanel({ statusData }) {
           );
         })}
 
-        {Object.entries(SEGMENT_COORDS).map(([id, coords]) => {
-          const mid = coords[Math.floor(coords.length / 2)];
-          return mid ? <Marker key={`lbl-${id}`} position={mid} icon={createLabel(id)} interactive={false} /> : null;
-        })}
 
         {annotations.filter(a => a.expiresAt > now).map(a => <AnnotationMarker key={a.id} annotation={a} />)}
         <MapController mapFlyTo={mapFlyTo} />

@@ -1,4 +1,5 @@
 import os
+import time
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -16,10 +17,8 @@ from gemini_client import call_gemini_api
 import random
 app = FastAPI()
 
-# Track active scenario so analytics context stays in sync
 _active_scenario: str = "normal"
 
-# Lightweight weather simulation — deterministic enough per scenario
 _WEATHER_BY_SCENARIO = {
     "normal":   ["clear", "clear", "clear", "cloudy"],
     "forming":  ["cloudy", "light_rain", "light_rain", "fog"],
@@ -27,8 +26,20 @@ _WEATHER_BY_SCENARIO = {
 }
 
 def _get_weather() -> str:
-    options = _WEATHER_BY_SCENARIO.get(_active_scenario, ["clear"])
-    return random.choice(options)
+    return random.choice(_WEATHER_BY_SCENARIO.get(_active_scenario, ["clear"]))
+
+# Pipeline cache — shared between /api/status and /api/chat (one run per simulator tick)
+_pipeline_cache: dict = {"result": None, "ts": 0.0}
+_CACHE_TTL = 2.0  # seconds — matches simulator tick rate
+
+def _get_cached_pipeline(db) -> dict:
+    now = time.monotonic()
+    if _pipeline_cache["result"] is None or (now - _pipeline_cache["ts"]) > _CACHE_TTL:
+        _pipeline_cache["result"] = get_pipeline_context(
+            db, active_scenario=_active_scenario, weather=_get_weather()
+        )
+        _pipeline_cache["ts"] = now
+    return _pipeline_cache["result"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,18 +74,13 @@ def simulator_control(action: str):
 
 @app.get("/api/status")
 def read_status(db: Session = Depends(get_db)):
-    ctx = get_pipeline_context(
-        db,
-        active_scenario=_active_scenario,
-        weather=_get_weather(),
-    )
-    # Reshape list → {segmentId: {...}} dict that the frontend expects
+    ctx = _get_cached_pipeline(db)
     return {seg["segment_id"]: seg for seg in ctx["segments"]}
 
 
 @app.get("/api/history/{seg}")
 def read_history(seg: str, limit: int = 30, db: Session = Depends(get_db)):
-    if seg not in ["S1", "S2", "S3", "S4", "S5"]:
+    if seg not in [f"S{i}" for i in range(1, 21)]:
         raise HTTPException(status_code=404, detail="Segment not found")
     return get_history(db, seg, limit=min(limit, 60))
 
@@ -85,6 +91,8 @@ def update_scenario(mode: str):
         raise HTTPException(status_code=400, detail="Invalid mode")
     _active_scenario = mode
     set_scenario(mode)
+    # Bust cache so next request reflects the new scenario immediately
+    _pipeline_cache["ts"] = 0.0
     return {"status": "success", "mode": mode}
 
 @app.post("/api/incident")
@@ -153,13 +161,10 @@ def list_readings(
     min_severity: str | None = None,   # "watch" | "warning" | "critical"
     db: Session = Depends(get_db),
 ):
-    """Return paginated SegmentReading rows enriched with computed analytics fields."""
+    """Paginated SegmentReading rows with analytics fields computed from available signals."""
     from sqlalchemy import desc as _desc
     from models import SegmentReading as SR
-    from analytics import (
-        NORMAL_STDDEV, SEVERITY_THRESHOLDS, score_to_severity,
-        compute_risk_score,
-    )
+    from analytics import NORMAL_STDDEV, score_to_severity, compute_risk_score
 
     _SEV_RANK = {"normal": 0, "watch": 1, "warning": 2, "critical": 3}
     min_rank  = _SEV_RANK.get(min_severity or "", 0)
@@ -169,22 +174,23 @@ def list_readings(
         q = q.filter(SR.segment_id == segment_id)
     total_unfiltered = q.count()
 
-    # Fetch a broad window then apply severity filter in Python
-    # (severity is computed, not stored — avoid storing it to keep DB simple)
+    # Over-fetch to compensate for severity filtering (severity not stored in DB)
     rows = q.order_by(_desc(SR.timestamp)).offset(offset).limit(min(limit * 4, 2000)).all()
 
     items = []
     for row in rows:
-        normal_stddev   = NORMAL_STDDEV.get(row.segment_id, 5.5)
-        variance_ratio  = round(row.speed_stddev / normal_stddev, 2) if normal_stddev > 0 else 1.0
-        baseline_delta  = (
+        normal_stddev  = NORMAL_STDDEV.get(row.segment_id, 5.5)
+        variance_ratio = round(row.speed_stddev / normal_stddev, 2) if normal_stddev > 0 else 1.0
+        baseline_delta = (
             round(((row.avg_speed_kmh - row.baseline_avg_speed) / row.baseline_avg_speed) * 100, 1)
             if row.baseline_avg_speed > 0 else 0.0
         )
-        # Simplified risk using only the two cheapest signals (no rolling state needed)
+        # Note: historical rows don't have rolling CUSUM/z-score state, so those
+        # contributions are 0. Risk score is conservative (under-reports severity)
+        # but is consistent and honest about what signals are available.
         risk_score = compute_risk_score(
             variance_ratio=variance_ratio,
-            cusum_upper=0.0,            # no CUSUM state for historical rows
+            cusum_upper=0.0,
             baseline_delta_pct=baseline_delta,
             z_speed=0.0,
         )
@@ -194,18 +200,18 @@ def list_readings(
             continue
 
         items.append({
-            "id":               row.id,
-            "timestamp":        row.timestamp.isoformat(),
-            "segment_id":       row.segment_id,
-            "avg_speed_kmh":    round(row.avg_speed_kmh, 1),
-            "speed_stddev":     round(row.speed_stddev, 1),
-            "baseline_avg_speed": round(row.baseline_avg_speed, 1),
-            "baseline_delta_pct": baseline_delta,
-            "variance_ratio":   variance_ratio,
-            "sample_count":     row.sample_count,
+            "id":                  row.id,
+            "timestamp":           row.timestamp.isoformat(),
+            "segment_id":          row.segment_id,
+            "avg_speed_kmh":       round(row.avg_speed_kmh, 1),
+            "speed_stddev":        round(row.speed_stddev, 1),
+            "baseline_avg_speed":  round(row.baseline_avg_speed, 1),
+            "baseline_delta_pct":  baseline_delta,
+            "variance_ratio":      variance_ratio,
+            "sample_count":        row.sample_count,
             "travel_time_seconds": round(row.travel_time_seconds, 1) if row.travel_time_seconds else None,
-            "risk_score":       risk_score,
-            "severity":         severity,
+            "risk_score":          risk_score,
+            "severity":            severity,
         })
 
         if len(items) >= limit:
@@ -216,14 +222,7 @@ def list_readings(
 
 @app.post("/api/chat")
 def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    # Build enriched context via the 2-pass analytics pipeline:
-    #   Pass 1 — per-segment scores (z-score, CUSUM, trend, forecast, risk)
-    #   Pass 2 — propagation, which needs all Pass-1 scores to exist first
-    llm_context = get_pipeline_context(
-        db,
-        active_scenario=_active_scenario,
-        weather=_get_weather(),
-    )
+    llm_context = _get_cached_pipeline(db)
     try:
         response = call_gemini_api(request.message, request.history, llm_context)
         return response

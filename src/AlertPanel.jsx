@@ -10,7 +10,10 @@ export default function AlertPanel({ statusData }) {
   const { expandedAlertId } = useUICommand();
   const dispatch = useUICommandDispatch();
 
-  const SEGMENT_ORDER = ['S1', 'S2', 'S3', 'S4', 'S5'];
+  // Derive and sort segments numerically from live status data
+  const SEGMENT_ORDER = Object.keys(statusData || {}).sort(
+    (a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1))
+  );
   const alerts = SEGMENT_ORDER
     .map(id => statusData?.[id])
     .filter(seg => seg && ['critical', 'warning', 'watch'].includes(seg.severity));

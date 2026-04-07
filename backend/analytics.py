@@ -1,39 +1,3 @@
-from sqlalchemy.orm import Session
-from models import SegmentReading
-from sqlalchemy import desc
-
-def get_latest_status(db: Session):
-    status = {}
-    for seg in ["S1", "S2", "S3", "S4", "S5"]:
-        reading = db.query(SegmentReading).filter(SegmentReading.segment_id == seg).order_by(desc(SegmentReading.timestamp)).first()
-        if reading:
-            baseline_delta_pct = ((reading.avg_speed_kmh - reading.baseline_avg_speed) / reading.baseline_avg_speed) * 100
-            variance_ratio = reading.speed_stddev / 5.0
-            
-            status[seg] = {
-                "segment_id": reading.segment_id,
-                "timestamp": reading.timestamp.isoformat(),
-                "avg_speed_kmh": reading.avg_speed_kmh,
-                "speed_stddev": reading.speed_stddev,
-                "sample_count": reading.sample_count,
-                "travel_time_seconds": reading.travel_time_seconds,
-                "baseline_avg_speed": reading.baseline_avg_speed,
-                "baseline_delta_pct": baseline_delta_pct,
-                "variance_ratio": variance_ratio
-            }
-    return status
-
-def get_history(db: Session, segment_id: str, limit: int = 30):
-    readings = db.query(SegmentReading).filter(SegmentReading.segment_id == segment_id).order_by(desc(SegmentReading.timestamp)).limit(limit).all()
-    return [
-        {
-            "timestamp": r.timestamp.isoformat(),
-            "avg_speed_kmh": r.avg_speed_kmh,
-            "speed_stddev": r.speed_stddev
-        }
-        for r in reversed(readings)
-    ]
-
 """
 analytics.py — Corridor Intelligence Analytics Pipeline
 
@@ -49,6 +13,20 @@ Pipeline stages:
   6. Risk score  — single 0.0–1.0 composite score per segment
 """
 
+def get_history(db, segment_id: str, limit: int = 30):
+    from models import SegmentReading
+    from sqlalchemy import desc
+    readings = db.query(SegmentReading).filter(SegmentReading.segment_id == segment_id).order_by(desc(SegmentReading.timestamp)).limit(limit).all()
+    return [
+        {
+            "timestamp": r.timestamp.isoformat(),
+            "avg_speed_kmh": r.avg_speed_kmh,
+            "speed_stddev": r.speed_stddev
+        }
+        for r in reversed(readings)
+    ]
+
+
 import math
 from collections import deque
 from dataclasses import dataclass, field
@@ -60,7 +38,6 @@ from typing import Literal
 
 # Rolling window sizes
 Z_SCORE_WINDOW = 20          # samples used to compute rolling mean/std
-CUSUM_WINDOW = 30            # samples kept for CUSUM state history
 TREND_WINDOW = 6             # samples compared to determine trend direction
 FORECAST_ALPHA = 0.25        # exponential smoothing factor (higher = more reactive)
 
@@ -88,14 +65,13 @@ SEVERITY_THRESHOLDS = {
 TREND_DETERIORATING_PCT = -3.0   # speed dropped more than 3%
 TREND_IMPROVING_PCT     =  3.0   # speed rose more than 3%
 
-# Normal stddev for each segment under free-flow (used for variance_ratio)
-# These would come from historical calibration in production
+# Normal stddev for each segment under free-flow (interpolated across 20 sub-segments)
 NORMAL_STDDEV = {
-    "S1": 5.2,
-    "S2": 5.8,
-    "S3": 5.5,
-    "S4": 6.1,
-    "S5": 5.0,
+    "S1":  5.20, "S2":  5.35, "S3":  5.50, "S4":  5.65,   # old S1 zone
+    "S5":  5.80, "S6":  5.73, "S7":  5.65, "S8":  5.58,   # old S2 zone
+    "S9":  5.50, "S10": 5.65, "S11": 5.80, "S12": 5.95,  # old S3 zone
+    "S13": 6.10, "S14": 5.83, "S15": 5.55, "S16": 5.28,  # old S4 zone
+    "S17": 5.00, "S18": 5.00, "S19": 5.00, "S20": 5.00,  # old S5 zone
 }
 
 
@@ -119,7 +95,7 @@ class SegmentState:
     smoothed_speed: float | None = None
 
     # Recent readings for trend + forecast
-    recent_speeds: deque = field(default_factory=lambda: deque(maxlen=max(TREND_WINDOW, CUSUM_WINDOW)))
+    recent_speeds: deque = field(default_factory=lambda: deque(maxlen=30))
 
 
 # Global state store — one entry per segment, persists across requests
@@ -415,22 +391,11 @@ def run_pipeline(raw_readings: list[dict], segment_order: list[str]) -> list[dic
 
         state = _get_state(seg_id)
 
-        avg_speed       = reading["avg_speed_kmh"]
-        speed_stddev    = reading["speed_stddev"]
-        baseline_speed  = reading["baseline_avg_speed"]
-        variance_ratio  = reading.get("variance_ratio", 1.0)
-        baseline_delta  = reading.get("baseline_delta_pct", 0.0)
-        normal_stddev   = NORMAL_STDDEV.get(seg_id, 5.5)
-
-        # Ensure variance_ratio is computed if missing
-        if normal_stddev > 0:
-            variance_ratio = round(speed_stddev / normal_stddev, 2)
-
-        # Baseline delta
-        if baseline_speed > 0:
-            baseline_delta = round(
-                ((avg_speed - baseline_speed) / baseline_speed) * 100, 1
-            )
+        avg_speed      = reading["avg_speed_kmh"]
+        speed_stddev   = reading["speed_stddev"]
+        baseline_speed = reading["baseline_avg_speed"]
+        variance_ratio = reading["variance_ratio"]
+        baseline_delta = reading["baseline_delta_pct"]
 
         z_speed, z_stddev         = compute_z_scores(state, avg_speed, speed_stddev)
         cusum_upper, cusum_lower  = compute_cusum(state, avg_speed, baseline_speed)
@@ -477,7 +442,7 @@ def run_pipeline(raw_readings: list[dict], segment_order: list[str]) -> list[dic
 
 
 # ---------------------------------------------------------------------------
-# Context formatter — produces the final payload for Claude
+# Context formatter — produces the final payload for Gemini
 # ---------------------------------------------------------------------------
 
 def format_llm_context(
@@ -486,10 +451,7 @@ def format_llm_context(
     weather: str = "clear",
     active_events: list[str] | None = None,
 ) -> dict:
-    """
-    Packages enriched analytics into the structured context object
-    injected into the Claude system prompt.
-    """
+    """Packages enriched analytics into the structured context object injected into the system prompt."""
     return {
         "corridor": "Highway 401 Westbound — Weston Rd to Allen Rd",
         "scenario": active_scenario,
@@ -513,7 +475,7 @@ def format_llm_context(
 # DB bridge — fetch → pipeline (2 passes) → LLM context in one call
 # ---------------------------------------------------------------------------
 
-SEGMENT_ORDER = ["S1", "S2", "S3", "S4", "S5"]
+SEGMENT_ORDER = [f"S{i}" for i in range(1, 21)]
 
 
 def get_pipeline_context(

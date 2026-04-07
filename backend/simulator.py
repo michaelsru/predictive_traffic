@@ -8,7 +8,7 @@ from models import SegmentReading
 
 Base.metadata.create_all(bind=engine)
 
-SEGMENTS = ["S1", "S2", "S3", "S4", "S5"]
+SEGMENTS = [f"S{i}" for i in range(1, 21)]
 BASE_SPEED = 100.0
 BASE_STDDEV = 5.0
 
@@ -46,17 +46,21 @@ def generate_reading(segment_id: str) -> SegmentReading:
     stddev += random.uniform(-0.5, 0.5)
     
     if scenario_mode == "forming":
-        if segment_id == "S3":
+        # Old S3 → new S9-S12 (middle corridor); early signs on first two sub-segs
+        if segment_id in ("S9", "S10"):
             stddev = BASE_STDDEV * random.uniform(3.0, 4.0)
             avg_speed = BASE_SPEED * random.uniform(0.88, 0.92)
     elif scenario_mode == "incident":
-        if segment_id == "S3":
+        # Core incident zone: old S3 → new S9-S12
+        if segment_id in ("S9", "S10", "S11", "S12"):
             avg_speed = BASE_SPEED * random.uniform(0.2, 0.3)
             stddev = BASE_STDDEV * random.uniform(1.5, 2.5)
-        elif segment_id == "S2":
+        # Upstream spillback: old S2 tail → new S7-S8
+        elif segment_id in ("S7", "S8"):
             avg_speed = BASE_SPEED * random.uniform(0.5, 0.6)
             stddev = BASE_STDDEV * random.uniform(2.0, 3.0)
-        elif segment_id == "S4":
+        # Downstream gawking: old S4 head → new S13-S14
+        elif segment_id in ("S13", "S14"):
             avg_speed = BASE_SPEED * random.uniform(1.05, 1.1)
             stddev = BASE_STDDEV * random.uniform(0.8, 1.2)
             
