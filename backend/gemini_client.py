@@ -1,7 +1,11 @@
 import os
 import json
+import logging
 from google import genai
 from google.genai import types
+
+logger = logging.getLogger("gemini_client")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
 # ---------------------------------------------------------------------------
 # 11 UI command types the agent can emit per step
@@ -123,6 +127,11 @@ Response schema (strict):
 
     contents.append({"role": "user", "parts": [{"text": message}]})
 
+    logger.debug("=== GEMINI IN ===")
+    logger.debug("USER MESSAGE: %s", message)
+    logger.debug("HISTORY TURNS: %d", len(history))
+    logger.debug("SYSTEM PROMPT (trimmed):\n%s", system_prompt[:2000])
+
     response = client.models.generate_content(
         model="gemini-3-flash-preview",
         contents=contents,
@@ -134,6 +143,7 @@ Response schema (strict):
     )
 
     response_text = response.text.strip()
+    logger.debug("=== GEMINI OUT (raw) ===\n%s", response_text[:4000])
 
     # Strip accidental markdown fences
     if response_text.startswith("```json"):
@@ -155,4 +165,8 @@ Response schema (strict):
     while len(commands) < length:
         commands.append({"type": "clearHighlights"})
 
-    return {"narrative": narratives, "uiCommands": commands}
+    result = {"narrative": narratives, "uiCommands": commands}
+    logger.debug("=== GEMINI PARSED === steps=%d", len(narratives))
+    for i, (n, c) in enumerate(zip(narratives, commands)):
+        logger.debug("  [%d] cmd=%-18s  %s", i, c.get("type", "?"), n[:80])
+    return result

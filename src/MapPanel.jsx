@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -34,11 +34,12 @@ function MapController({ mapFlyTo }) {
 }
 
 function AnnotationMarker({ annotation }) {
-  const icon = L.divIcon({
-    className: 'annotation-icon border-10 border-yellow-700',
+  const icon = useMemo(() => L.divIcon({
+    className: 'annotation-icon',
     html: `<div class="annotation-bubble">${annotation.text}</div>`,
-    iconAnchor: [0, 0],
-  });
+    iconSize: [160, 40],
+    iconAnchor: [0, 40],
+  }), [annotation.text]);
   return <Marker position={[annotation.lat, annotation.lng]} icon={icon} interactive={false} />;
 }
 

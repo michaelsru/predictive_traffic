@@ -46,8 +46,10 @@
   background: rgba(17,24,39,0.95);
   color: #f9fafb;
   font-size: 0.78rem;
-  max-width: 200px;
-  padding: 6px 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  width: max-content;
+  padding: 5px 10px;
   border-radius: 8px;
   border: 1px solid #4b5563;
   box-shadow: 0 4px 16px rgba(0,0,0,0.5);
