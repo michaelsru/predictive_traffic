@@ -8,21 +8,26 @@ from google.genai import types
 # ---------------------------------------------------------------------------
 UI_COMMAND_SCHEMA = """
 UI command types (one object per step — only ONE command per step):
-  { "type": "panTo",         "segmentId": "S1"|"S2"|"S3"|"S4"|"S5" }
+  { "type": "focusSegment", "segmentId": "S9", "lat": float, "lng": float, "label": "S9 — 28 km/h", "durationMs": 4000 }
+    ↳ Compound: flies map to segment, expands its alert card, and drops a label annotation.
+      Use this whenever you are DISCUSSING a specific segment. lat/lng from anchor coordinates.
+      label should be a short fact (speed, severity, risk%) — max 20 chars.
   { "type": "pulseSegment",  "segmentId": "...", "color": "green"|"yellow"|"amber"|"red", "durationMs": 2000 }
   { "type": "clearHighlights" }
   { "type": "switchChart",   "segmentId": "..." }
   { "type": "switchMetric",  "metric": "speed"|"volume"|"risk" }
   { "type": "setTimeWindow", "minutes": 5|15|30|60 }
-  { "type": "expandAlert",   "segmentId": "..." }
   { "type": "pulseKpi",      "kpi": "avgSpeed"|"worstSegment"|"activeAlerts", "durationMs": 1500 }
   { "type": "switchOverlay", "overlay": "risk"|"speed"|"volume" }
-  { "type": "annotate",      "lat": float, "lng": float, "text": "...", "durationMs": 4000 }
+  { "type": "panTo",         "segmentId": "..." }  ← use only when NOT discussing a segment directly
+  { "type": "annotate",      "lat": float, "lng": float, "text": "...", "durationMs": 4000 }  ← standalone annotation only
+  { "type": "expandAlert",   "segmentId": "..." }  ← use only to expand without flying to
 
 Rules:
 - narrative[] and uiCommands[] MUST have the same length (one command per step).
 - Every step MUST have a meaningful UI action from the list above.
 - STEP COUNT is determined by corridor conditions, not query type (see Response length below).
+- When narrating about a specific segment, ALWAYS prefer focusSegment over panTo alone.
 """
 
 SEGMENT_LOCATIONS = {
@@ -57,17 +62,18 @@ QUERY_INTENTS = """
 Response length — ALWAYS evaluate corridor conditions first:
 
 NOMINAL (all segments have severity="normal" AND risk_score < 0.25):
-  → 1 step only. panTo the highest-risk segment. Narrative: single sentence stating
+  → 1 step only. focusSegment on the highest-risk segment. Narrative: single sentence stating
     corridor is clear, corridor-wide avg speed (km/h), and speed std dev range. Nothing more.
 
 NON-NOMINAL (any segment has severity != "normal" OR risk_score >= 0.25):
   → Focus ONLY on segments with severity != "normal", ordered by risk_score descending.
-  → 2–3 steps per affected segment: panTo, pulseSegment with appropriate color, expandAlert if critical.
+  → 1 step per affected segment using focusSegment: flies map there, expands alert, labels with speed and risk%.
+  → Follow each focusSegment step with a pulseSegment step (color matches severity: red=critical, amber=warning, yellow=watch).
   → State: current speed vs baseline, risk_score, severity, trend, and any propagation direction.
   → Skip all segments with severity="normal" entirely — do not mention them unless asked.
 
 Query-specific additions (apply on top of the above):
-- Risk explanation: also switchMetric to risk and expandAlert for the worst segment.
+- Risk explanation: also switchMetric to risk before the segment steps.
 - Timeline walk: also setTimeWindow before narrating changes.
 - "What to watch": identify fastest-rising risk_score or deteriorating trend; narrate shockwave risk.
 - Alert triage: process non-normal segments in strict risk_score descending order.

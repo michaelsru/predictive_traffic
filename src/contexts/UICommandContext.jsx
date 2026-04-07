@@ -24,6 +24,32 @@ function uiCommandReducer(state, action) {
   const now = Date.now();
 
   switch (action.type) {
+    case 'focusSegment': {
+      // Compound: panTo + expandAlert + optional annotate — fires atomically.
+      // action: { segmentId, lat?, lng?, label?, durationMs? }
+      const focusPulse = action.lat != null && action.lng != null && action.label
+        ? (() => {
+            const id = ++annotationCounter;
+            return {
+              annotations: [...state.annotations, {
+                id,
+                lat: action.lat,
+                lng: action.lng,
+                text: action.label,
+                expiresAt: now + (action.durationMs ?? 4000),
+              }],
+            };
+          })()
+        : { annotations: state.annotations };
+      return {
+        ...state,
+        mapFlyTo: { segmentId: action.segmentId, ts: now },
+        activeSegment: action.segmentId,
+        expandedAlertId: action.segmentId,
+        ...focusPulse,
+      };
+    }
+
     case 'panTo':
       return {
         ...state,
