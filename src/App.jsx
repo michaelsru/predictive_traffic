@@ -7,7 +7,7 @@ import KpiBar from './KpiBar';
 import CctvSidebar from './CctvSidebar';
 import LogsPage from './LogsPage';
 import SimulatorControls from './SimulatorControls';
-import { fetchStatus, setScenario } from './api';
+import { fetchStatus, setScenario, fetchSimulatorStatus } from './api';
 import { useQuery } from '@tanstack/react-query';
 import { UICommandContextProvider } from './contexts/UICommandContext';
 import { AgentContextProvider } from './contexts/AgentContext';
@@ -19,10 +19,17 @@ function App() {
   const [cctvOpen, setCctvOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
 
+  const { data: simStatus } = useQuery({
+    queryKey: ['simulatorStatus'],
+    queryFn: fetchSimulatorStatus,
+    refetchInterval: 3000,
+  });
+  const isRunning = simStatus?.running ?? true;
+
   const { data: statusData = {} } = useQuery({
     queryKey: ['status'],
     queryFn: fetchStatus,
-    refetchInterval: 5000,
+    refetchInterval: isRunning ? 5000 : false,
   });
 
   const handleScenarioChange = async (mode) => {
@@ -82,7 +89,7 @@ function App() {
             <ChatPanel history={chatHistory} onResponse={handleChatResponse} onViewFootage={() => setCctvOpen(true)} />
             <MapPanel statusData={statusData} />
             <AlertPanel statusData={statusData} />
-            <SegmentPanel statusData={statusData} />
+            <SegmentPanel statusData={statusData} isRunning={isRunning} />
           </main>
           <CctvSidebar open={cctvOpen} onClose={() => setCctvOpen(false)} />
           {logsOpen && <LogsPage onClose={() => setLogsOpen(false)} />}

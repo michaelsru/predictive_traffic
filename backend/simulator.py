@@ -1,5 +1,4 @@
 import threading
-import time
 import random
 from datetime import datetime
 from database import SessionLocal, engine, Base
@@ -13,20 +12,15 @@ BASE_SPEED = 100.0
 BASE_STDDEV = 5.0
 
 scenario_mode = "normal"
-_paused = threading.Event()   # set = paused, clear = running
+_stop_event = threading.Event()
+_thread: threading.Thread | None = None
 
 def set_scenario(mode: str):
     global scenario_mode
     scenario_mode = mode
 
-def pause():
-    _paused.set()
-
-def resume():
-    _paused.clear()
-
-def is_paused() -> bool:
-    return _paused.is_set()
+def is_running() -> bool:
+    return _thread is not None and _thread.is_alive()
 
 def clear_readings():
     """Truncate segment_readings — call only when paused or from the main thread."""
@@ -75,10 +69,7 @@ def generate_reading(segment_id: str) -> SegmentReading:
     )
 
 def simulator_loop():
-    while True:
-        if _paused.is_set():
-            time.sleep(0.5)
-            continue
+    while not _stop_event.is_set():
         db = SessionLocal()
         try:
             for seg in SEGMENTS:
@@ -87,8 +78,19 @@ def simulator_loop():
             db.commit()
         finally:
             db.close()
-        time.sleep(2)
+        _stop_event.wait(timeout=2)  # wakes immediately if stopped
 
 def start_simulator():
-    thread = threading.Thread(target=simulator_loop, daemon=True)
-    thread.start()
+    global _thread, _stop_event
+    if _thread and _thread.is_alive():
+        return  # already running
+    _stop_event = threading.Event()
+    _thread = threading.Thread(target=simulator_loop, daemon=True)
+    _thread.start()
+
+def stop_simulator():
+    global _thread
+    _stop_event.set()
+    if _thread:
+        _thread.join(timeout=3)
+        _thread = None

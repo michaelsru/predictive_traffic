@@ -29,12 +29,12 @@ function Sparkline({ data, color }) {
   );
 }
 
-function SegmentCard({ segmentId, data, isActive, activeMetric, timeWindowMins }) {
+function SegmentCard({ segmentId, data, isActive, activeMetric, timeWindowMins, isRunning }) {
   const limit = Math.min(Math.ceil(timeWindowMins * 15), 30);
   const { data: history = [] } = useQuery({
     queryKey: ['history', segmentId, limit],
     queryFn: () => fetchHistory(segmentId, limit),
-    refetchInterval: 4000,
+    refetchInterval: isRunning ? 4000 : false,
   });
 
   if (!data) return (
@@ -88,7 +88,7 @@ function SegmentCard({ segmentId, data, isActive, activeMetric, timeWindowMins }
   );
 }
 
-export default function SegmentPanel({ statusData }) {
+export default function SegmentPanel({ statusData, isRunning }) {
   const { activeSegment, activeMetric, timeWindowMins } = useUICommand();
   // Derive segment list dynamically from live data, sorted numerically (S1, S2, ... S20)
   const SEGMENTS = Object.keys(statusData || {}).sort(
@@ -120,6 +120,7 @@ export default function SegmentPanel({ statusData }) {
             isActive={activeSegment === seg}
             activeMetric={activeMetric}
             timeWindowMins={timeWindowMins}
+            isRunning={isRunning}
           />
         ))}
       </div>

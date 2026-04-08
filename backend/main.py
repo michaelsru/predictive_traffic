@@ -11,7 +11,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env.local')
 from sqlalchemy.orm import Session
 from database import get_db, engine, Base
 from models import ChatRequest, IncidentLog, IncidentRequest
-from simulator import start_simulator, set_scenario, pause, resume, is_paused, clear_readings
+from simulator import start_simulator, stop_simulator, set_scenario, is_running, clear_readings
 from analytics import get_history, get_pipeline_context
 from gemini_client import call_gemini_api
 import random
@@ -55,21 +55,21 @@ def startup_event():
 
 @app.get("/api/simulator/status")
 def simulator_status():
-    return {"running": not is_paused()}
+    return {"running": is_running()}
 
 
 @app.post("/api/simulator/{action}")
 def simulator_control(action: str):
     if action == "stop":
-        pause()
+        stop_simulator()
     elif action == "start":
-        resume()
+        start_simulator()
     elif action == "clear":
-        pause()
+        stop_simulator()
         clear_readings()
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action '{action}'")
-    return {"running": not is_paused()}
+    return {"running": is_running()}
 
 
 @app.get("/api/status")
