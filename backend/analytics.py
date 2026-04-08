@@ -47,9 +47,9 @@ CUSUM_H = 4.0                # decision threshold (alarm when score exceeds this
 
 # Risk score weights — must sum to 1.0
 RISK_WEIGHTS = {
-    "variance_ratio":   0.35,
-    "cusum_upper":      0.30,
-    "baseline_delta":   0.20,
+    "variance_ratio":   0.25,
+    "cusum_upper":      0.25,
+    "baseline_delta":   0.35,
     "z_speed":          0.15,
 }
 
@@ -192,14 +192,12 @@ def compute_cusum(
     # Lower CUSUM — accumulates when speed rises above baseline (clearing)
     state.cusum_lower = max(0.0, state.cusum_lower - deviation - CUSUM_K)
 
-    # Alarm + reset if threshold crossed
-    alarm_upper = state.cusum_upper >= CUSUM_H
-    alarm_lower = state.cusum_lower >= CUSUM_H
-
-    if alarm_upper:
-        state.cusum_upper = 0.0   # reset after alarm
-    if alarm_lower:
-        state.cusum_lower = 0.0
+    # Alarm + reset if threshold crossed — clamp rather than reset so
+    # sustained incidents don't zero out the CUSUM contribution.
+    if state.cusum_upper >= CUSUM_H:
+        state.cusum_upper = CUSUM_H   # stay at ceiling, not reset
+    if state.cusum_lower >= CUSUM_H:
+        state.cusum_lower = CUSUM_H
 
     # Normalise to 0.0–1.0 fraction of threshold (>1.0 means alarm fired)
     cusum_upper_norm = round(min(state.cusum_upper / CUSUM_H, 1.5), 3)
@@ -300,7 +298,18 @@ def compute_risk_score(
     return round(min(score, 1.0), 3)
 
 
-def score_to_severity(risk_score: float) -> str:
+def score_to_severity(risk_score: float, avg_speed_kmh: float | None = None, baseline_speed: float = 100.0) -> str:
+    # Absolute speed floor: severe slowdowns override the composite score.
+    # Prevents sustained incidents from appearing mild once CUSUM/z-score
+    # adapt to the new normal.
+    if avg_speed_kmh is not None and baseline_speed > 0:
+        speed_ratio = avg_speed_kmh / baseline_speed
+        if speed_ratio < 0.35:    # >65% below baseline → always critical
+            return "critical"
+        elif speed_ratio < 0.55:  # >45% below baseline → at least warning
+            if risk_score < SEVERITY_THRESHOLDS["warning"]:
+                return "warning"
+
     if risk_score >= SEVERITY_THRESHOLDS["critical"]:
         return "critical"
     elif risk_score >= SEVERITY_THRESHOLDS["warning"]:
@@ -405,7 +414,7 @@ def run_pipeline(raw_readings: list[dict], segment_order: list[str]) -> list[dic
                                         variance_ratio, cusum_upper,
                                         baseline_delta, z_speed
                                     )
-        severity                  = score_to_severity(risk_score)
+        severity                  = score_to_severity(risk_score, avg_speed, baseline_speed)
 
         partial_results[seg_id] = {
             "segment_id":        seg_id,
