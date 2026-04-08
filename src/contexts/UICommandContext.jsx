@@ -25,9 +25,9 @@ function uiCommandReducer(state, action) {
 
   switch (action.type) {
     case 'focusSegment': {
-      // Compound: panTo + expandAlert + optional annotate — fires atomically.
-      // action: { segmentId, lat?, lng?, label?, durationMs? }
-      const focusPulse = action.lat != null && action.lng != null && action.label
+      // Compound: panTo + expandAlert + pulseSegment + optional annotate — fires atomically.
+      // action: { segmentId, lat?, lng?, label?, durationMs?, color?, pulseDurationMs? }
+      const annotationPatch = action.lat != null && action.lng != null && action.label
         ? (() => {
             const id = ++annotationCounter;
             return {
@@ -46,7 +46,14 @@ function uiCommandReducer(state, action) {
         mapFlyTo: { segmentId: action.segmentId, ts: now },
         activeSegment: action.segmentId,
         expandedAlertId: action.segmentId,
-        ...focusPulse,
+        pulseSegments: {
+          ...state.pulseSegments,
+          [action.segmentId]: {
+            color: action.color ?? 'amber',
+            expiresAt: now + (action.pulseDurationMs ?? 2000),
+          },
+        },
+        ...annotationPatch,
       };
     }
 

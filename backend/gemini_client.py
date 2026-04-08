@@ -5,18 +5,24 @@ from google import genai
 from google.genai import types
 
 logger = logging.getLogger("gemini_client")
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [gemini_client] %(levelname)s %(message)s"))
+    logger.addHandler(_h)
+logger.setLevel(logging.DEBUG)
+
 
 # ---------------------------------------------------------------------------
 # 11 UI command types the agent can emit per step
 # ---------------------------------------------------------------------------
 UI_COMMAND_SCHEMA = """
 UI command types (one object per step — only ONE command per step):
-  { "type": "focusSegment", "segmentId": "S9", "lat": float, "lng": float, "label": "S9 — 28 km/h", "durationMs": 4000 }
-    ↳ Compound: flies map to segment, expands its alert card, and drops a label annotation.
+  { "type": "focusSegment", "segmentId": "S9", "lat": float, "lng": float, "label": "S9 — 28 km/h", "color": "red"|"amber"|"yellow"|"green", "durationMs": 4000, "pulseDurationMs": 2000 }
+    ↳ Compound: flies map to segment, expands its alert card, pulses it with color, and drops a label annotation.
       Use this whenever you are DISCUSSING a specific segment. lat/lng from anchor coordinates.
       label should be a short fact (speed, severity, risk%) — max 20 chars.
-  { "type": "pulseSegment",  "segmentId": "...", "color": "green"|"yellow"|"amber"|"red", "durationMs": 2000 }
+      color matches severity: red=critical, amber=warning, yellow=watch, green=normal.
+  { "type": "pulseSegment",  "segmentId": "...", "color": "...", "durationMs": 2000 }  ← standalone only, do NOT pair with focusSegment
   { "type": "clearHighlights" }
   { "type": "switchChart",   "segmentId": "..." }
   { "type": "switchMetric",  "metric": "speed"|"volume"|"risk" }
@@ -71,8 +77,7 @@ NOMINAL (all segments have severity="normal" AND risk_score < 0.25):
 
 NON-NOMINAL (any segment has severity != "normal" OR risk_score >= 0.25):
   → Focus ONLY on segments with severity != "normal", ordered by risk_score descending.
-  → 1 step per affected segment using focusSegment: flies map there, expands alert, labels with speed and risk%.
-  → Follow each focusSegment step with a pulseSegment step (color matches severity: red=critical, amber=warning, yellow=watch).
+  → 1 step per affected segment using focusSegment (include color matching severity).
   → State: current speed vs baseline, risk_score, severity, trend, and any propagation direction.
   → Skip all segments with severity="normal" entirely — do not mention them unless asked.
 
