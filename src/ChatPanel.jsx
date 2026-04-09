@@ -34,6 +34,7 @@ function groupSteps(narrative, uiCommands) {
 
 const SUGGESTED_QUERIES = [
   "Give me a full corridor brief",
+  "Handover brief — what happened in the last hour?",
   "What's happening near S3?",
   "Triage my active alerts",
   "Walk me through the last 30 minutes on S2",

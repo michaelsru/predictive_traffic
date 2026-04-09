@@ -5,7 +5,7 @@ Each function takes `db` as first arg + typed kwargs from the LLM,
 returns a JSON-serialisable dict. No analytics state touched here.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import desc
 
 from models import SegmentReading, IncidentLog, AlertLog
@@ -84,7 +84,7 @@ def get_speed_threshold_crossings(
     Reports 'dropped_below' and 'recovered_above' events with timestamps.
     Use to answer: "when exactly did congestion start on S9?"
     """
-    since = datetime.utcnow() - timedelta(minutes=since_mins)
+    since = datetime.now(timezone.utc) - timedelta(minutes=since_mins)
     rows = (
         db.query(SegmentReading)
         .filter(
@@ -133,7 +133,7 @@ def get_peak_conditions(db, segment_id: str, since_mins: int = 30) -> dict:
     Return the worst (min speed) and best (max speed) readings in the last
     `since_mins` minutes. Answers: "how bad did it get on S9?"
     """
-    since = datetime.utcnow() - timedelta(minutes=since_mins)
+    since = datetime.now(timezone.utc) - timedelta(minutes=since_mins)
     rows = (
         db.query(SegmentReading)
         .filter(
@@ -178,7 +178,7 @@ def get_corridor_snapshot(db, time_offset_mins: int = 15) -> dict:
     Return one reading per segment closest to `time_offset_mins` ago.
     Answers: "what did the corridor look like 15 minutes ago?"
     """
-    target_time = datetime.utcnow() - timedelta(minutes=time_offset_mins)
+    target_time = datetime.now(timezone.utc) - timedelta(minutes=time_offset_mins)
     snapshot = {}
     for seg_id in SEGMENT_ORDER:
         row = (
@@ -298,7 +298,7 @@ def get_segment_risk_trend(db, segment_id: str, since_mins: int = 30) -> dict:
     Note: CUSUM/z-score not available here (no pipeline state), so risk scores
     are conservative — directional accuracy is reliable, magnitudes are not.
     """
-    since = datetime.utcnow() - timedelta(minutes=since_mins)
+    since = datetime.now(timezone.utc) - timedelta(minutes=since_mins)
     rows  = (
         db.query(SegmentReading)
         .filter(
@@ -355,7 +355,7 @@ def get_alert_history(db, segment_id: str = None, since_mins: int = 60, limit: i
     Use to answer: 'has S9 been flapping?', 'when did S9 first go critical?',
     'how many transitions happened in the last hour?'
     """
-    since = datetime.utcnow() - timedelta(minutes=since_mins)
+    since = datetime.now(timezone.utc) - timedelta(minutes=since_mins)
     q = db.query(AlertLog).filter(AlertLog.created_at >= since)
     if segment_id:
         q = q.filter(AlertLog.segment_id == segment_id)
@@ -378,20 +378,181 @@ def get_alert_history(db, segment_id: str = None, since_mins: int = 60, limit: i
     }
 
 
+_SEV_RANK = {"normal": 0, "watch": 1, "warning": 2, "critical": 3}
+
+
+def get_corridor_handover_summary(db, since_mins: int = 60) -> dict:
+    """
+    Pre-aggregated corridor-wide alert digest for the last `since_mins` minutes.
+    Returns compact per-segment summaries grouped into active_alerts (currently
+    non-normal) and resolved_alerts (were non-normal but cleared in the window),
+    plus confirmed incident counts per segment.
+
+    Use when the user asks for a handover brief, shift summary, or
+    'what happened in the last hour?' — one call gives everything the LLM
+    needs to narrate without raw event pagination.
+    All timestamps in output are UTC (marked with _utc suffix).
+    human_time fields are pre-formatted 'HH:MM UTC' strings for use in narrative.
+    """
+    since = datetime.now(timezone.utc) - timedelta(minutes=since_mins)
+    now   = datetime.now(timezone.utc)
+
+    def _fmt_local(dt) -> str:
+        """Return 'HH:MM TZ' in server local timezone from any datetime (naive assumed UTC)."""
+        if dt is None:
+            return "unknown"
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone()
+        return local_dt.strftime("%H:%M %Z")
+
+    events = (
+        db.query(AlertLog)
+        .filter(AlertLog.created_at >= since)
+        .order_by(AlertLog.created_at)
+        .all()
+    )
+
+    incidents_in_window = (
+        db.query(IncidentLog)
+        .filter(IncidentLog.created_at >= since)
+        .all()
+    )
+    incident_counts: dict = {}
+    for inc in incidents_in_window:
+        incident_counts[inc.segment_id] = incident_counts.get(inc.segment_id, 0) + 1
+
+    # Group events by segment, oldest first
+    seg_events: dict = {}
+    for ev in events:
+        seg_events.setdefault(ev.segment_id, []).append(ev)
+
+    active_alerts   = []
+    resolved_alerts = []
+
+    def _severity_stats(evs) -> dict:
+        """
+        Compute cumulative time spent at each non-normal severity and the
+        first→last window for the worst severity (e.g. critical_window).
+        Uses consecutive event pairs as time spans. Final span ends at `now`.
+        """
+        time_in_sev: dict = {}
+        worst        = max(evs, key=lambda e: _SEV_RANK.get(e.severity, 0))
+        worst_sev_lv = _SEV_RANK.get(worst.severity, 0)
+        peak_start   = None
+        peak_end     = None
+
+        for i, ev in enumerate(evs):
+            sev = ev.severity
+            s_dt = ev.created_at
+            if s_dt.tzinfo is None:
+                s_dt = s_dt.replace(tzinfo=timezone.utc)
+            e_dt = evs[i + 1].created_at if i + 1 < len(evs) else now
+            if e_dt.tzinfo is None:
+                e_dt = e_dt.replace(tzinfo=timezone.utc)
+
+            dur = (e_dt - s_dt).total_seconds() / 60
+            if sev != "normal":
+                time_in_sev[sev] = time_in_sev.get(sev, 0.0) + dur
+
+            if _SEV_RANK.get(sev, 0) == worst_sev_lv and worst_sev_lv > 0:
+                if peak_start is None:
+                    peak_start = s_dt
+                peak_end = e_dt
+
+        result: dict = {
+            "total_alert_mins":   round(sum(time_in_sev.values()), 1),
+            "time_by_severity":   {k: round(v, 1) for k, v in time_in_sev.items()},
+        }
+        if peak_start and peak_end and worst.severity != "normal":
+            result["peak_severity_window"] = {
+                "severity":     worst.severity,
+                "from_time":    _fmt_local(peak_start),
+                "to_time":      _fmt_local(peak_end),
+                "duration_mins": round((peak_end - peak_start).total_seconds() / 60, 1),
+                "note": "first onset to last exit of peak severity — not total alert time",
+            }
+        return result
+
+    # ---------- main loop ----------
+    for seg_id, evs in seg_events.items():
+        first_alert = next((e for e in evs if e.severity != "normal"), None)
+        if first_alert is None:
+            continue
+
+        worst_sev        = max(evs, key=lambda e: _SEV_RANK.get(e.severity, 0)).severity
+        last_ev          = evs[-1]
+        current_sev      = last_ev.severity
+        transition_count = len(evs)
+        sev_stats        = _severity_stats(evs)
+
+        # Normalize created_at to aware for duration math
+        fa_dt = first_alert.created_at
+        if fa_dt.tzinfo is None:
+            fa_dt = fa_dt.replace(tzinfo=timezone.utc)
+
+        if current_sev == "normal":
+            resolved_ev = next((e for e in reversed(evs) if e.severity == "normal"), last_ev)
+            re_dt = resolved_ev.created_at
+            if re_dt.tzinfo is None:
+                re_dt = re_dt.replace(tzinfo=timezone.utc)
+            resolved_alerts.append({
+                "segment_id":           seg_id,
+                "worst_severity":       worst_sev,
+                "first_alert_time":     _fmt_local(fa_dt),
+                "resolved_at_time":     _fmt_local(re_dt),
+                "total_alert_mins":     round((re_dt - fa_dt).total_seconds() / 60, 1),
+                "transition_count":     transition_count,
+                "confirmed_incidents":  incident_counts.get(seg_id, 0),
+                **sev_stats,
+            })
+        else:
+            active_alerts.append({
+                "segment_id":           seg_id,
+                "current_severity":     current_sev,
+                "worst_severity":       worst_sev,
+                "first_alert_time":     _fmt_local(fa_dt),
+                "ongoing_since_mins":   round((now - fa_dt).total_seconds() / 60, 1),
+                "transition_count":     transition_count,
+                "confirmed_incidents":  incident_counts.get(seg_id, 0),
+                "last_speed_kmh":       last_ev.avg_speed_kmh,
+                "last_risk_score":      last_ev.risk_score,
+                **sev_stats,
+            })
+
+    # Worst severity first, then longest ongoing time
+    active_alerts.sort(
+        key=lambda x: (-_SEV_RANK.get(x["current_severity"], 0), -x["ongoing_since_mins"])
+    )
+    resolved_alerts.sort(key=lambda x: x["first_alert_time"], reverse=True)
+
+    return {
+        "summary_period_mins":  since_mins,
+        "generated_at_utc":     now.isoformat(),
+        "generated_at_time":    _fmt_local(now),
+        "segments_affected":    len(seg_events),
+        "total_transitions":    len(events),
+        "confirmed_incidents":  len(incidents_in_window),
+        "active_alerts":        active_alerts,
+        "resolved_alerts":      resolved_alerts,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher — called by gemini_client with (name, args, db)
 # ---------------------------------------------------------------------------
 
 _TOOL_FNS = {
-    "get_segment_history":          get_segment_history,
-    "get_multi_segment_history":    get_multi_segment_history,
-    "get_speed_threshold_crossings": get_speed_threshold_crossings,
-    "get_peak_conditions":          get_peak_conditions,
-    "get_corridor_snapshot":        get_corridor_snapshot,
-    "get_incidents":                get_incidents,
-    "get_propagation_window":       get_propagation_window,
-    "get_segment_risk_trend":       get_segment_risk_trend,
-    "get_alert_history":            get_alert_history,
+    "get_segment_history":              get_segment_history,
+    "get_multi_segment_history":        get_multi_segment_history,
+    "get_speed_threshold_crossings":    get_speed_threshold_crossings,
+    "get_peak_conditions":              get_peak_conditions,
+    "get_corridor_snapshot":            get_corridor_snapshot,
+    "get_incidents":                    get_incidents,
+    "get_propagation_window":           get_propagation_window,
+    "get_segment_risk_trend":           get_segment_risk_trend,
+    "get_alert_history":                get_alert_history,
+    "get_corridor_handover_summary":    get_corridor_handover_summary,
 }
 
 

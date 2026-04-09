@@ -169,6 +169,22 @@ _TOOL_DECLARATIONS = [
             "required": [],
         },
     ),
+    types.FunctionDeclaration(
+        name="get_corridor_handover_summary",
+        description=(
+            "Pre-aggregated corridor-wide alert digest. Returns per-segment summaries of active alerts "
+            "(currently non-normal) and resolved alerts (cleared in the window), plus confirmed incident "
+            "counts. Designed for operator handover, shift summaries, and 'what happened in the last hour?' "
+            "questions. ONE call gives a complete picture — no pagination needed."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "since_mins": {"type": "integer", "description": "Look-back window in minutes (default 60)"},
+            },
+            "required": [],
+        },
+    ),
 ]
 
 _TOOLS = types.Tool(function_declarations=_TOOL_DECLARATIONS)
@@ -253,14 +269,29 @@ Query-specific additions (apply on top of the above):
 # ---------------------------------------------------------------------------
 
 def call_gemini_api(message: str, history: list, status_data: dict, db=None):
+    import datetime as _dt
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable not set")
 
     client = genai.Client(api_key=api_key)
 
+    # Compute server local UTC offset for the LLM to display local times
+    now_local  = _dt.datetime.now(_dt.timezone.utc).astimezone()
+    utc_offset = now_local.strftime("%z")          # e.g. "-0700"
+    tz_name    = now_local.strftime("%Z")           # e.g. "PDT"
+    local_time = now_local.strftime("%H:%M %Z")    # e.g. "10:34 PDT"
+
     system_prompt = f"""You are an expert TMC (Traffic Management Center) operator assistant for Highway 401 westbound in Toronto.
 You are NOT a chatbot. You are a co-pilot that reads live traffic data and drives the dashboard while you talk.
+
+TIMESTAMP CONTEXT:
+- Current server local time: {local_time}
+- UTC offset: {utc_offset} ({tz_name})
+- All timestamps in tool results are UTC. Tool results from get_corridor_handover_summary include pre-formatted
+  human_time fields (e.g. \"first_alert_time\": \"17:02 UTC\") — convert these to local time for your narrative.
+- To convert UTC to local: apply the UTC offset. With offset {utc_offset}, subtract the offset hours.
+  Example: 00:14 UTC with offset -0700 → 17:14 {tz_name}.
 
 LIVE CORRIDOR DATA (assembled at query time — use ONLY these numbers in your narrative):
 {json.dumps(status_data, indent=2)}
@@ -273,9 +304,11 @@ Segment anchor coordinates:
 {UI_COMMAND_SCHEMA}
 
 TOOL USE GUIDELINES:
-- You have access to 8 data-fetching tools. Call them when the user's question requires historical data
+- You have access to 10 data-fetching tools. Call them when the user's question requires historical data
   that is NOT in the live corridor snapshot above (e.g. "how long has this been going on?",
   "how did it propagate?", "what did the corridor look like 15 minutes ago?").
+- For handover briefs / shift summaries, call get_corridor_handover_summary first — it returns everything
+  in one shot without pagination.
 - For simple status/triage questions, use the live data above — do NOT call a tool unnecessarily.
 - You may call multiple tools in sequence (up to {_MAX_TOOL_ROUNDS} rounds). After getting tool results,
   incorporate them directly into your narrative with specific timestamps and numbers.
@@ -285,6 +318,17 @@ CRITICAL RULES:
 2. If a UI command references a segment that doesn't exist, use clearHighlights and narrate the gap.
 3. narrative[] and uiCommands[] must always have EXACTLY the same length.
 4. Return ONLY the raw JSON object — no markdown, no preamble.
+5. TIMESTAMPS: Always cite specific local times for events. Never say 'earlier' or 'recently' without a clock time.
+   Convert UTC tool timestamps to local using the UTC offset above.
+   Use the human_time fields from handover results as a starting point, then convert: \"began at 17:02 {tz_name}\"
+   Do NOT show UTC in the narrative — local time only.
+6. DURATION: Always include duration in minutes when describing historical events.
+   e.g. "S9 was critical for 1.6 minutes (17:28–17:30 {tz_name})"
+7. SEVERITY DURATION — NEVER HALLUCINATE: `total_alert_mins` covers the ENTIRE alerting period across ALL
+   severity levels. It does NOT mean the segment was critical (or any single severity) for that whole time.
+   To state how long a specific severity lasted, use `peak_severity_window.duration_mins` and its
+   `from_time`/`to_time` from the handover result, OR call get_alert_history(segment_id=X) to get
+   the exact transition log. NEVER say "was critical for X minutes" using total_alert_mins.
 
 Response schema (strict):
 {{
