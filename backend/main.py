@@ -11,7 +11,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env.local')
 
 from sqlalchemy.orm import Session
 from database import get_db, engine, Base
-from models import ChatRequest, IncidentLog, IncidentRequest
+from models import ChatRequest, IncidentLog, IncidentRequest, AlertLog
 from simulator import start_simulator, stop_simulator, set_scenario, is_running, clear_readings
 from analytics import get_history, get_pipeline_context
 from gemini_client import call_gemini_api
@@ -33,14 +33,45 @@ def _get_weather() -> str:
 _pipeline_cache: dict = {"result": None, "ts": 0.0}
 _CACHE_TTL = 2.0  # seconds — matches simulator tick rate
 
+# Severity transition state — track last known severity per segment for alert logging
+_prev_severities: dict[str, str] = {}
+
 def _get_cached_pipeline(db) -> dict:
     now = time.monotonic()
     if _pipeline_cache["result"] is None or (now - _pipeline_cache["ts"]) > _CACHE_TTL:
-        _pipeline_cache["result"] = get_pipeline_context(
+        result = get_pipeline_context(
             db, active_scenario=_active_scenario, weather=_get_weather()
         )
+        _pipeline_cache["result"] = result
         _pipeline_cache["ts"] = now
+        _log_severity_transitions(result)
     return _pipeline_cache["result"]
+
+def _log_severity_transitions(pipeline_result: dict) -> None:
+    """Compare current severities to previous tick; write an AlertLog row on any change."""
+    from database import SessionLocal
+    segments = pipeline_result.get("segments", [])
+    new_entries = []
+    for seg in segments:
+        seg_id   = seg["segment_id"]
+        severity = seg["severity"]
+        prev     = _prev_severities.get(seg_id, "normal")
+        if severity != prev:
+            new_entries.append(AlertLog(
+                segment_id    = seg_id,
+                severity      = severity,
+                prev_severity = prev,
+                avg_speed_kmh = seg.get("avg_speed_kmh"),
+                risk_score    = seg.get("risk_score"),
+            ))
+            _prev_severities[seg_id] = severity
+    if new_entries:
+        alert_db = SessionLocal()
+        try:
+            alert_db.add_all(new_entries)
+            alert_db.commit()
+        finally:
+            alert_db.close()
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,9 +99,42 @@ def simulator_control(action: str):
     elif action == "clear":
         stop_simulator()
         clear_readings()
+        # Reset severity state so transitions re-fire after a clear
+        _prev_severities.clear()
+        _pipeline_cache["ts"] = 0.0
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action '{action}'")
     return {"running": is_running()}
+
+
+@app.get("/api/alert-logs")
+def list_alert_logs(
+    limit: int = 100,
+    offset: int = 0,
+    segment_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import desc as _desc
+    q = db.query(AlertLog)
+    if segment_id:
+        q = q.filter(AlertLog.segment_id == segment_id)
+    total = q.count()
+    rows  = q.order_by(_desc(AlertLog.created_at)).offset(offset).limit(min(limit, 500)).all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "id":            r.id,
+                "created_at":    r.created_at.isoformat(),
+                "segment_id":    r.segment_id,
+                "severity":      r.severity,
+                "prev_severity": r.prev_severity,
+                "avg_speed_kmh": r.avg_speed_kmh,
+                "risk_score":    r.risk_score,
+            }
+            for r in rows
+        ],
+    }
 
 
 @app.get("/api/status")

@@ -151,6 +151,24 @@ _TOOL_DECLARATIONS = [
             "required": ["segment_id"],
         },
     ),
+    types.FunctionDeclaration(
+        name="get_alert_history",
+        description=(
+            "Return severity-transition events from the alert log (normal→watch, watch→critical, etc.) "
+            "for one or all segments. Each event shows FROM/TO severity with timestamp and speed. "
+            "Use for 'has S9 been flapping?', 'when did S9 first go critical?', "
+            "'how often has S9 triggered alerts in the last hour?' questions."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "segment_id": {"type": "string", "description": "Filter to a specific segment (omit for all segments)"},
+                "since_mins": {"type": "integer", "description": "Look-back window in minutes (default 60)"},
+                "limit":      {"type": "integer", "description": "Max events to return (default 50)"},
+            },
+            "required": [],
+        },
+    ),
 ]
 
 _TOOLS = types.Tool(function_declarations=_TOOL_DECLARATIONS)

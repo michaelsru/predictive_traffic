@@ -71,5 +71,10 @@ export const logIncident = async (payload) => {
     throw new Error(detail);
   }
   return res.json();
+};export const fetchAlertLogs = async ({ limit = 100, offset = 0, segment_id } = {}) => {
+  const params = new URLSearchParams({ limit, offset });
+  if (segment_id) params.set('segment_id', segment_id);
+  const res = await fetch(`/api/alert-logs?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch alert logs');
+  return res.json();
 };
-

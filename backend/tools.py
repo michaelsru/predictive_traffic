@@ -8,7 +8,7 @@ returns a JSON-serialisable dict. No analytics state touched here.
 from datetime import datetime, timedelta
 from sqlalchemy import desc
 
-from models import SegmentReading, IncidentLog
+from models import SegmentReading, IncidentLog, AlertLog
 from analytics import NORMAL_STDDEV, compute_risk_score
 
 SEGMENT_ORDER = [f"S{i}" for i in range(1, 21)]
@@ -348,6 +348,35 @@ def get_segment_risk_trend(db, segment_id: str, since_mins: int = 30) -> dict:
         "data_points":      data_points,
     }
 
+def get_alert_history(db, segment_id: str = None, since_mins: int = 60, limit: int = 50) -> dict:
+    """
+    Return severity transition events (from AlertLog) for one or all segments.
+    Each event records what severity changed FROM and TO, with timestamp and speed.
+    Use to answer: 'has S9 been flapping?', 'when did S9 first go critical?',
+    'how many transitions happened in the last hour?'
+    """
+    since = datetime.utcnow() - timedelta(minutes=since_mins)
+    q = db.query(AlertLog).filter(AlertLog.created_at >= since)
+    if segment_id:
+        q = q.filter(AlertLog.segment_id == segment_id)
+    rows = q.order_by(AlertLog.created_at).limit(min(limit, 200)).all()
+    return {
+        "segment_id":    segment_id,
+        "since_mins":    since_mins,
+        "event_count":   len(rows),
+        "transitions": [
+            {
+                "timestamp":     r.created_at.isoformat(),
+                "segment_id":    r.segment_id,
+                "from":          r.prev_severity,
+                "to":            r.severity,
+                "avg_speed_kmh": r.avg_speed_kmh,
+                "risk_score":    r.risk_score,
+            }
+            for r in rows
+        ],
+    }
+
 
 # ---------------------------------------------------------------------------
 # Dispatcher — called by gemini_client with (name, args, db)
@@ -362,6 +391,7 @@ _TOOL_FNS = {
     "get_incidents":                get_incidents,
     "get_propagation_window":       get_propagation_window,
     "get_segment_risk_trend":       get_segment_risk_trend,
+    "get_alert_history":            get_alert_history,
 }
 
 

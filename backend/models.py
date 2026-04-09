@@ -4,6 +4,17 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import List, Optional
 
+class AlertLog(Base):
+    __tablename__ = "alert_logs"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    created_at   = Column(DateTime, default=datetime.utcnow)
+    segment_id   = Column(String, index=True)
+    severity     = Column(String)           # watch | warning | critical | normal (cleared)
+    prev_severity = Column(String)          # what it was before this transition
+    avg_speed_kmh = Column(Float, nullable=True)
+    risk_score   = Column(Float, nullable=True)
+
 class SegmentReading(Base):
     __tablename__ = "segment_readings"
 

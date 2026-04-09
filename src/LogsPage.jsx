@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchIncidents, fetchReadings } from './api';
+import { fetchIncidents, fetchReadings, fetchAlertLogs } from './api';
 
 // ── shared style maps ────────────────────────────────────────────────────────
 const SEV_BADGE = {
@@ -116,15 +116,10 @@ function TrafficTab({ segFilter }) {
 // ── Alerts tab ───────────────────────────────────────────────────────────────
 function AlertsTab({ segFilter }) {
   const [page, setPage] = useState(0);
-
-  const params = {
-    limit: PAGE_SIZE, offset: page * PAGE_SIZE,
-    min_severity: 'watch',
-    ...(segFilter ? { segment_id: segFilter } : {}),
-  };
+  const params = { limit: PAGE_SIZE, offset: page * PAGE_SIZE, ...(segFilter ? { segment_id: segFilter } : {}) };
   const { data, isLoading, isError, error } = useQuery({
-    queryKey:         ['readings-alerts', params],
-    queryFn:          () => fetchReadings(params),
+    queryKey:         ['alert-logs', params],
+    queryFn:          () => fetchAlertLogs(params),
     keepPreviousData: true,
     refetchInterval:  5_000,
   });
@@ -135,29 +130,30 @@ function AlertsTab({ segFilter }) {
 
   return (
     <TabShell isLoading={isLoading} isError={isError} error={error}
-              empty={items.length === 0} emptyMsg="No alert-level readings recorded."
+              empty={items.length === 0} emptyMsg="No alert transitions recorded yet."
               page={page} pages={pages} total={total} onPage={setPage}>
       <table className="w-full text-xs border-separate border-spacing-y-0.5">
         <thead>
           <tr>
-            <Th>Time</Th><Th>Seg</Th><Th>Status</Th>
-            <Th right>Speed</Th><Th right>Δ%</Th>
-            <Th right>Var ×</Th><Th right>Risk</Th>
+            <Th>Time</Th><Th>Seg</Th><Th>Transition</Th>
+            <Th right>Speed</Th><Th right>Risk</Th>
           </tr>
         </thead>
         <tbody>
           {items.map(r => (
             <tr key={r.id} className="bg-gray-900 hover:bg-gray-800 transition-colors">
-              <Td mono dim className="rounded-l-lg whitespace-nowrap">{fmt(r.timestamp)}</Td>
+              <Td mono dim className="rounded-l-lg whitespace-nowrap">{fmt(r.created_at)}</Td>
               <Td className="font-bold text-blue-300">{r.segment_id}</Td>
-              <Td><SevBadge sev={r.severity} /></Td>
-              <Td right mono>{r.avg_speed_kmh} km/h</Td>
-              <Td right mono className={r.baseline_delta_pct < -5 ? 'text-orange-400' : ''}>
-                {r.baseline_delta_pct > 0 ? '+' : ''}{r.baseline_delta_pct}%
+              <Td>
+                <span className="inline-flex items-center gap-1.5">
+                  <SevBadge sev={r.prev_severity} />
+                  <span className="text-gray-500">&#8594;</span>
+                  <SevBadge sev={r.severity} />
+                </span>
               </Td>
-              <Td right mono className={r.variance_ratio > 2.5 ? 'text-yellow-400' : ''}>{r.variance_ratio}×</Td>
-              <Td right mono className="rounded-r-lg text-red-400">
-                {(r.risk_score * 100).toFixed(0)}%
+              <Td right mono>{r.avg_speed_kmh != null ? r.avg_speed_kmh.toFixed(1) + ' km/h' : '—'}</Td>
+              <Td right mono className={`rounded-r-lg ${r.risk_score > 0.5 ? 'text-red-400' : ''}`}>
+                {r.risk_score != null ? (r.risk_score * 100).toFixed(0) + '%' : '—'}
               </Td>
             </tr>
           ))}
