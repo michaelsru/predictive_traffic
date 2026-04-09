@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from fastapi import FastAPI, Depends, HTTPException
@@ -224,11 +225,18 @@ def list_readings(
 def chat(request: ChatRequest, db: Session = Depends(get_db)):
     llm_context = _get_cached_pipeline(db)
     try:
-        response = call_gemini_api(request.message, request.history, llm_context)
+        response = call_gemini_api(request.message, request.history, llm_context, db)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
+
+    class _SuppressApiPolling(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "/api/" not in record.getMessage()
+
+    logging.getLogger("uvicorn.access").addFilter(_SuppressApiPolling())
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

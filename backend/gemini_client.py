@@ -11,10 +11,155 @@ if not logger.handlers:
     logger.addHandler(_h)
 logger.setLevel(logging.DEBUG)
 
+# Max tool-call rounds before aborting (prevents infinite loops)
+_MAX_TOOL_ROUNDS = 5
 
 # ---------------------------------------------------------------------------
-# 11 UI command types the agent can emit per step
+# Tool declarations — mirrors tools.py signatures exactly
 # ---------------------------------------------------------------------------
+
+_TOOL_DECLARATIONS = [
+    types.FunctionDeclaration(
+        name="get_segment_history",
+        description=(
+            "Return the last N readings for one segment (oldest→newest). "
+            "Use when the user asks how long congestion has been going on, "
+            "or wants a time-series view of a single segment."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "segment_id": {"type": "string", "description": "e.g. 'S9'"},
+                "limit":      {"type": "integer", "description": "Number of readings to return (max 120, default 30)"},
+            },
+            "required": ["segment_id"],
+        },
+    ),
+    types.FunctionDeclaration(
+        name="get_multi_segment_history",
+        description=(
+            "Return recent readings for multiple segments side-by-side. "
+            "Use to compare onset timestamps and trace how congestion propagated "
+            "from segment to segment."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "segment_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of segment IDs, e.g. ['S7', 'S8', 'S9', 'S10']",
+                },
+                "limit": {"type": "integer", "description": "Readings per segment (max 60, default 20)"},
+            },
+            "required": ["segment_ids"],
+        },
+    ),
+    types.FunctionDeclaration(
+        name="get_speed_threshold_crossings",
+        description=(
+            "Find every moment speed crossed a given threshold in the last N minutes. "
+            "Returns 'dropped_below' and 'recovered_above' events with exact timestamps. "
+            "Use when the user asks 'when exactly did S9 slow down?' or 'how long has S9 been below 50 km/h?'"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "segment_id":    {"type": "string"},
+                "threshold_kmh": {"type": "number", "description": "Speed threshold in km/h, e.g. 50.0"},
+                "since_mins":    {"type": "integer", "description": "Look-back window in minutes (default 60)"},
+            },
+            "required": ["segment_id", "threshold_kmh"],
+        },
+    ),
+    types.FunctionDeclaration(
+        name="get_peak_conditions",
+        description=(
+            "Return the worst (min speed) and best (max speed) readings for a segment "
+            "in the last N minutes. Use for 'how bad did it get?' questions."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "segment_id": {"type": "string"},
+                "since_mins": {"type": "integer", "description": "Look-back window in minutes (default 30)"},
+            },
+            "required": ["segment_id"],
+        },
+    ),
+    types.FunctionDeclaration(
+        name="get_corridor_snapshot",
+        description=(
+            "Return one reading per segment from approximately N minutes ago. "
+            "Use when the user asks 'what did the corridor look like 15 minutes ago?' "
+            "or wants to compare current vs past state."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "time_offset_mins": {"type": "integer", "description": "How many minutes ago to snapshot (default 15)"},
+            },
+            "required": ["time_offset_mins"],
+        },
+    ),
+    types.FunctionDeclaration(
+        name="get_incidents",
+        description=(
+            "Return operator-confirmed incidents from the log, optionally filtered by segment. "
+            "Use when the user asks 'have any incidents been confirmed?' or 'show me logged incidents on S9'."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "segment_id": {"type": "string", "description": "Filter to a specific segment (omit for all segments)"},
+                "limit":      {"type": "integer", "description": "Max incidents to return (default 20)"},
+            },
+            "required": [],
+        },
+    ),
+    types.FunctionDeclaration(
+        name="get_propagation_window",
+        description=(
+            "Return recent history for an anchor segment plus its upstream and downstream neighbours. "
+            "Comparing timestamps across neighbours reveals how congestion spread. "
+            "Use for 'how did the congestion propagate from S9?' questions."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "anchor_segment_id": {"type": "string", "description": "The segment at the centre of the analysis"},
+                "upstream_count":    {"type": "integer", "description": "How many upstream segments to include (default 3)"},
+                "downstream_count":  {"type": "integer", "description": "How many downstream segments to include (default 3)"},
+                "limit_per_segment": {"type": "integer", "description": "Readings per segment (default 20)"},
+            },
+            "required": ["anchor_segment_id"],
+        },
+    ),
+    types.FunctionDeclaration(
+        name="get_segment_risk_trend",
+        description=(
+            "Compute risk score over time for a segment and return trend direction "
+            "('rising', 'stable', 'falling') with data points. "
+            "Use for 'is S9 getting worse or stabilising?' questions."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "segment_id": {"type": "string"},
+                "since_mins": {"type": "integer", "description": "Look-back window in minutes (default 30)"},
+            },
+            "required": ["segment_id"],
+        },
+    ),
+]
+
+_TOOLS = types.Tool(function_declarations=_TOOL_DECLARATIONS)
+
+
+# ---------------------------------------------------------------------------
+# UI command schema (unchanged)
+# ---------------------------------------------------------------------------
+
 UI_COMMAND_SCHEMA = """
 UI command types (one object per step — only ONE command per step):
   { "type": "focusSegment", "segmentId": "S9", "lat": float, "lng": float, "label": "S9 — 28 km/h", "color": "red"|"amber"|"yellow"|"green", "durationMs": 4000, "pulseDurationMs": 2000 }
@@ -81,10 +226,15 @@ Query-specific additions (apply on top of the above):
 - Timeline walk: also setTimeWindow before narrating changes.
 - "What to watch": identify fastest-rising risk_score or deteriorating trend; narrate shockwave risk.
 - Alert triage: process non-normal segments in strict risk_score descending order.
+- Historical/duration questions: call the relevant tool(s) first, then incorporate findings into narrative.
 """
 
 
-def call_gemini_api(message: str, history: list, status_data: dict):
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def call_gemini_api(message: str, history: list, status_data: dict, db=None):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable not set")
@@ -104,11 +254,19 @@ Segment anchor coordinates:
 
 {UI_COMMAND_SCHEMA}
 
+TOOL USE GUIDELINES:
+- You have access to 8 data-fetching tools. Call them when the user's question requires historical data
+  that is NOT in the live corridor snapshot above (e.g. "how long has this been going on?",
+  "how did it propagate?", "what did the corridor look like 15 minutes ago?").
+- For simple status/triage questions, use the live data above — do NOT call a tool unnecessarily.
+- You may call multiple tools in sequence (up to {_MAX_TOOL_ROUNDS} rounds). After getting tool results,
+  incorporate them directly into your narrative with specific timestamps and numbers.
+
 CRITICAL RULES:
-1. Never invent numbers. Every speed, risk score, volume, z-score, or time reference MUST come from the live data above.
+1. Never invent numbers. Every speed, risk score, or timestamp MUST come from live data or tool results.
 2. If a UI command references a segment that doesn't exist, use clearHighlights and narrate the gap.
 3. narrative[] and uiCommands[] must always have EXACTLY the same length.
-4. Return ONLY the raw JSON object below — no markdown, no preamble.
+4. Return ONLY the raw JSON object — no markdown, no preamble.
 
 Response schema (strict):
 {{
@@ -120,29 +278,89 @@ Response schema (strict):
 }}
 """
 
+    # Build initial contents from history
     contents = []
     for msg in history:
         role = "user" if msg["role"] == "user" else "model"
         contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
-
     contents.append({"role": "user", "parts": [{"text": message}]})
+
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        tools=[_TOOLS],
+        temperature=0.2,
+        # NOTE: response_mime_type cannot be set when tools are active.
+        # JSON output is enforced via system prompt + post-processing only.
+    )
 
     logger.debug("=== GEMINI IN ===")
     logger.debug("USER MESSAGE: %s", message)
     logger.debug("HISTORY TURNS: %d", len(history))
-    logger.debug("SYSTEM PROMPT (trimmed):\n%s", system_prompt[:2000])
 
-    response = client.models.generate_content(
+    # ---------------------------------------------------------------------------
+    # Tool call loop
+    # ---------------------------------------------------------------------------
+    from tools import execute_tool
+
+    for round_num in range(_MAX_TOOL_ROUNDS + 1):
+        response = client.models.generate_content(
         model="gemini-3-flash-preview",
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            response_mime_type="application/json",
-            temperature=0.2,
-        ),
-    )
+            contents=contents,
+            config=config,
+        )
 
-    response_text = response.text.strip()
+        candidate = response.candidates[0]
+        parts = candidate.content.parts
+
+        # Check if any part is a function call
+        function_calls = [p for p in parts if hasattr(p, "function_call") and p.function_call]
+
+        if not function_calls:
+            # No tool call — this is the final text response
+            break
+
+        if round_num == _MAX_TOOL_ROUNDS:
+            logger.warning("Hit max tool rounds (%d), forcing final response", _MAX_TOOL_ROUNDS)
+            break
+
+        # Append model's tool-call response to contents
+        contents.append(candidate.content)
+
+        # Execute each tool call and append results
+        tool_response_parts = []
+        for part in function_calls:
+            fc   = part.function_call
+            args = dict(fc.args) if fc.args else {}
+            logger.debug("[TOOL CALL #%d] %s(%s)", round_num + 1, fc.name, args)
+
+            if db is None:
+                result = {"error": "No database session available for tool calls"}
+            else:
+                result = execute_tool(fc.name, args, db)
+
+            logger.debug("[TOOL RESULT] %s → %s", fc.name,
+                         str(result)[:300] + ("…" if len(str(result)) > 300 else ""))
+
+            tool_response_parts.append(
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        name=fc.name,
+                        response={"result": result},
+                    )
+                )
+            )
+
+        contents.append(types.Content(role="tool", parts=tool_response_parts))
+
+    # ---------------------------------------------------------------------------
+    # Parse final text response
+    # ---------------------------------------------------------------------------
+    response_text = ""
+    for part in response.candidates[0].content.parts:
+        if hasattr(part, "text") and part.text:
+            response_text += part.text
+
+    response_text = response_text.strip()
     logger.debug("=== GEMINI OUT (raw) ===\n%s", response_text[:4000])
 
     # Strip accidental markdown fences
@@ -157,8 +375,8 @@ Response schema (strict):
 
     # Validate and repair: ensure both arrays have the same length
     narratives = parsed.get("narrative", [])
-    commands = parsed.get("uiCommands", [])
-    length = max(len(narratives), len(commands))
+    commands   = parsed.get("uiCommands", [])
+    length     = max(len(narratives), len(commands))
 
     while len(narratives) < length:
         narratives.append("")
